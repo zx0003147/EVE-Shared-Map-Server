@@ -1,0 +1,59 @@
+name: eve-shared-map-dev
+
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: ${SHARED_MAP_DEV_DATABASE_NAME:?Set SHARED_MAP_DEV_DATABASE_NAME in .env}
+      POSTGRES_USER: ${SHARED_MAP_DEV_DATABASE_USER:?Set SHARED_MAP_DEV_DATABASE_USER in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  server:
+    profiles: ["server"]
+    build:
+      context: .
+    environment:
+      SHARED_MAP_BIND_HOST: 0.0.0.0
+      SHARED_MAP_PORT: 8080
+      SHARED_MAP_DATABASE_URL: jdbc:postgresql://postgres:5432/${SHARED_MAP_DEV_DATABASE_NAME:?Set SHARED_MAP_DEV_DATABASE_NAME in .env}
+      SHARED_MAP_DATABASE_USER: ${SHARED_MAP_DEV_DATABASE_USER:?Set SHARED_MAP_DEV_DATABASE_USER in .env}
+      SHARED_MAP_DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      SHARED_MAP_ENVIRONMENT: development
+      SHARED_MAP_LOG_LEVEL: INFO
+    secrets:
+      - db_password
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+secrets:
+  db_password:
+    file: ${SHARED_MAP_DEV_DATABASE_PASSWORD_FILE:?Set SHARED_MAP_DEV_DATABASE_PASSWORD_FILE in .env}
+
+volumes:
+  postgres_dev_data:
