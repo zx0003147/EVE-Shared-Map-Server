@@ -12,7 +12,7 @@ services:
     ports:
       - "127.0.0.1:54329:5432"
     volumes:
-      - postgres_dev_data:/var/lib/postgresql/data
+      - postgres_dev_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -42,7 +42,7 @@ services:
         condition: service_healthy
     read_only: true
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      - /tmp/eve-shared-map:size=64m,mode=1777
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
       interval: 10s

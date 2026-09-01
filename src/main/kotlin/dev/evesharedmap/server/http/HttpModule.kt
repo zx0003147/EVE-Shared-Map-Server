@@ -2,7 +2,7 @@ package dev.evesharedmap.server.http
 
 import dev.evesharedmap.server.health.ReadinessProbe
 import dev.evesharedmap.server.health.healthRoutes
-import dev.evesharedmap.server.logging.LogSanitizer
+import dev.evesharedmap.server.logging.installStructuredAccessLogging
 import dev.evesharedmap.server.meta.metaRoutes
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
@@ -14,20 +14,13 @@ import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.PayloadTooLargeException
 import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.callid.callId
-import io.ktor.server.plugins.callid.callIdMdc
-import io.ktor.server.plugins.calllogging.CallLogging
-import io.ktor.server.plugins.calllogging.processingTimeMillis
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
-import io.ktor.server.request.httpMethod
-import io.ktor.server.request.path
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.routing
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.slf4j.LoggerFactory
-import org.slf4j.event.Level
 import java.time.Clock
 
 private const val MAX_REQUEST_BODY_BYTES = 32L * 1024L
@@ -46,18 +39,7 @@ fun Application.configureHttp(
     additionalRoutes: Routing.() -> Unit = {},
 ) {
     installRequestIdPlugin()
-
-    install(CallLogging) {
-        logger = LoggerFactory.getLogger("http.access")
-        level = Level.INFO
-        disableDefaultColors()
-        callIdMdc("requestId")
-        mdc("method") { call -> call.request.httpMethod.value }
-        mdc("route") { call -> LogSanitizer.routeTemplate(call.request.path()) }
-        mdc("status") { call -> call.response.status()?.value?.toString() ?: "unresolved" }
-        mdc("durationMs") { call -> call.processingTimeMillis().toString() }
-        format { "http_request" }
-    }
+    installStructuredAccessLogging()
 
     install(ContentNegotiation) {
         json(

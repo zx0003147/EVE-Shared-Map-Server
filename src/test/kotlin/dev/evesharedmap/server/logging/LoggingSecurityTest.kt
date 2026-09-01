@@ -54,8 +54,24 @@ class LoggingSecurityTest {
             assertEquals("safe-test-request-id", accessEvent.mdcPropertyMap["requestId"])
             assertEquals("GET", accessEvent.mdcPropertyMap["method"])
             assertEquals("/health", accessEvent.mdcPropertyMap["route"])
-            assertTrue(accessEvent.mdcPropertyMap.containsKey("status"))
+            assertEquals("200", accessEvent.mdcPropertyMap["status"])
             assertTrue(accessEvent.mdcPropertyMap.containsKey("durationMs"))
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
+    }
+
+    @Test
+    fun `HTTP access log records final unavailable status`() = testApplication {
+        val (logger, appender) = capturingLogger("http.access")
+        try {
+            application { configureHttp(ReadinessProbe { false }, "0.1.0-SNAPSHOT") }
+
+            client.get("/health")
+
+            val accessEvent = appender.list.last { it.formattedMessage == "http_request" }
+            assertEquals("503", accessEvent.mdcPropertyMap["status"])
         } finally {
             logger.detachAppender(appender)
             appender.stop()
