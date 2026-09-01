@@ -4,12 +4,14 @@ import dev.evesharedmap.server.api.sharedMapRoutes
 import dev.evesharedmap.server.health.ReadinessProbe
 import dev.evesharedmap.server.health.healthRoutes
 import dev.evesharedmap.server.logging.installStructuredAccessLogging
+import dev.evesharedmap.server.marker.SharedMarkerService
 import dev.evesharedmap.server.meta.metaRoutes
 import dev.evesharedmap.server.security.InMemoryTokenBucketRateLimiter
 import dev.evesharedmap.server.security.RateLimiter
 import dev.evesharedmap.server.security.RateLimits
 import dev.evesharedmap.server.service.ServiceException
 import dev.evesharedmap.server.service.SharedMapService
+import dev.evesharedmap.server.universe.SolarSystemAllowlist
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
@@ -49,6 +51,8 @@ fun Application.configureHttp(
     serverVersion: String,
     clock: Clock = Clock.systemUTC(),
     sharedMapService: SharedMapService? = null,
+    sharedMarkerService: SharedMarkerService? = null,
+    universeBuild: String = SolarSystemAllowlist.load().universeBuild,
     rateLimiter: RateLimiter = InMemoryTokenBucketRateLimiter(clock),
     additionalRoutes: Routing.() -> Unit = {},
 ) {
@@ -139,8 +143,10 @@ fun Application.configureHttp(
             }
         }
         healthRoutes(readinessProbe, serverVersion, clock, publicRateGuard)
-        metaRoutes(serverVersion, publicRateGuard)
-        if (sharedMapService != null) sharedMapRoutes(sharedMapService, rateLimiter = rateLimiter)
+        metaRoutes(serverVersion, universeBuild, publicRateGuard)
+        if (sharedMapService != null) {
+            sharedMapRoutes(sharedMapService, sharedMarkerService, rateLimiter = rateLimiter)
+        }
         additionalRoutes()
     }
 }

@@ -62,14 +62,14 @@ class HealthRoutesTest {
     }
 
     @Test
-    fun `meta returns implemented Phase 2 features without shared markers`() = testApplication {
+    fun `meta returns implemented Phase 3 features and universe build`() = testApplication {
         application { configureHttp(ReadinessProbe { true }, VERSION, fixedClock) }
 
         val response = client.get("/api/v1/meta")
 
         assertEquals(HttpStatusCode.OK, response.status)
         assertEquals(
-            """{"serverVersion":"$VERSION","protocolVersion":1,"minimumClientProtocolVersion":1,"maximumClientProtocolVersion":1,"features":["members","invites","device-revocation"]}""",
+            """{"serverVersion":"$VERSION","protocolVersion":1,"minimumClientProtocolVersion":1,"maximumClientProtocolVersion":1,"features":["shared-markers","members","invites","device-revocation"],"universeBuild":"sde-3466501"}""",
             response.bodyAsText(),
         )
     }

@@ -5,6 +5,8 @@ import dev.evesharedmap.server.domain.DeviceTokenMetadata
 import dev.evesharedmap.server.domain.InviteMetadata
 import dev.evesharedmap.server.domain.MemberRecord
 import dev.evesharedmap.server.domain.WorkspaceMembership
+import dev.evesharedmap.server.marker.SharedMarker
+import dev.evesharedmap.server.marker.SharedMarkerSnapshot
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -29,6 +31,24 @@ data class UpdateMemberRequest(
 @Serializable
 data class CreateInviteRequest(
     val expiresInHours: Long = 72,
+)
+
+@Serializable
+data class CreateSharedMarkerRequest(
+    val systemId: Int,
+    val name: String,
+    val color: String,
+    val tags: List<String>,
+    val notes: String?,
+)
+
+@Serializable
+data class UpdateSharedMarkerRequest(
+    val expectedVersion: Long,
+    val name: String,
+    val color: String,
+    val tags: List<String>,
+    val notes: String?,
 )
 
 @Serializable
@@ -121,6 +141,30 @@ data class InviteMetadataDto(
 @Serializable
 data class InvitesResponse(val invites: List<InviteMetadataDto>)
 
+@Serializable
+data class SharedMarkerDto(
+    val markerId: String,
+    val workspaceId: String,
+    val systemId: Int,
+    val name: String,
+    val color: String,
+    val tags: List<String>,
+    val notes: String?,
+    val createdBy: UserDto,
+    val updatedBy: UserDto,
+    val createdAt: String,
+    val updatedAt: String,
+    val version: Long,
+)
+
+@Serializable
+data class SharedMarkerSnapshotResponse(
+    val workspaceId: String,
+    val revision: Long,
+    val generatedAt: String,
+    val markers: List<SharedMarkerDto>,
+)
+
 internal fun AuthenticationPrincipal.toMeResponse(): MeResponse = MeResponse(
     user = UserDto(membership.user.userId.toString(), membership.user.displayName),
     workspace = membership.toDto(),
@@ -168,4 +212,26 @@ internal fun InviteMetadata.toDto(): InviteMetadataDto = InviteMetadataDto(
     usedAt = usedAt?.toString(),
     revokedAt = revokedAt?.toString(),
     status = status.name,
+)
+
+internal fun SharedMarker.toDto(): SharedMarkerDto = SharedMarkerDto(
+    markerId = markerId.toString(),
+    workspaceId = workspaceId.toString(),
+    systemId = systemId,
+    name = name,
+    color = color.name,
+    tags = tags,
+    notes = notes,
+    createdBy = UserDto(createdBy.userId.toString(), createdBy.displayName),
+    updatedBy = UserDto(updatedBy.userId.toString(), updatedBy.displayName),
+    createdAt = createdAt.toString(),
+    updatedAt = updatedAt.toString(),
+    version = version,
+)
+
+internal fun SharedMarkerSnapshot.toResponse(): SharedMarkerSnapshotResponse = SharedMarkerSnapshotResponse(
+    workspaceId = workspaceId.toString(),
+    revision = revision,
+    generatedAt = generatedAt.toString(),
+    markers = markers.map { it.toDto() },
 )

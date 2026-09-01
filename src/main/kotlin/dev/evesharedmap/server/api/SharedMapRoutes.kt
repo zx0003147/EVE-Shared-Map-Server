@@ -3,6 +3,7 @@ package dev.evesharedmap.server.api
 import dev.evesharedmap.server.domain.AuthenticationPrincipal
 import dev.evesharedmap.server.domain.WorkspaceCapability
 import dev.evesharedmap.server.domain.WorkspaceRole
+import dev.evesharedmap.server.marker.SharedMarkerService
 import dev.evesharedmap.server.security.RateLimiter
 import dev.evesharedmap.server.security.RateLimits
 import dev.evesharedmap.server.service.AuthorizationService
@@ -28,12 +29,15 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.time.Duration
 import java.util.UUID
 
 fun Route.sharedMapRoutes(
     service: SharedMapService,
+    markerService: SharedMarkerService? = null,
     authorization: AuthorizationService = AuthorizationService(),
     rateLimiter: RateLimiter,
 ) {
@@ -96,6 +100,104 @@ fun Route.sharedMapRoutes(
         val workspaceId = canonicalUuid(call.parameters["workspaceId"])
         authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.READ)
         call.respond(principal.membership.toDto())
+    }
+
+    if (markerService != null) {
+        get("/api/v1/workspaces/{workspaceId}/markers") {
+            val principal = call.authenticate(service)
+            call.enforceAuthenticatedReadRate(rateLimiter, principal)
+            val workspaceId = canonicalUuid(call.parameters["workspaceId"])
+            authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.READ)
+            call.respond(markerService.listSnapshot(workspaceId).toResponse())
+        }
+
+        post("/api/v1/workspaces/{workspaceId}/markers") {
+            val principal = call.authenticate(service)
+            val workspaceId = canonicalUuid(call.parameters["workspaceId"])
+            authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.MARKER_WRITE)
+            val body = call.receiveStrictJson<CreateSharedMarkerRequest>()
+            call.executeMutation(
+                service,
+                principal,
+                call.requireIdempotencyKey(),
+                mutationFingerprint("POST", "/api/v1/workspaces/$workspaceId/markers", body.json),
+                requiredCapability = WorkspaceCapability.MARKER_WRITE,
+                beforeRespond = { result ->
+                    val markerId = result.response.responseBody!!.jsonObject.getValue("markerId").jsonPrimitive.content
+                    response.header(HttpHeaders.Location, "/api/v1/workspaces/$workspaceId/markers/$markerId")
+                },
+            ) { connection ->
+                call.enforceMarkerWriteRate(rateLimiter, principal)
+                val marker = markerService.create(
+                    connection = connection,
+                    actor = principal,
+                    systemId = body.value.systemId,
+                    name = body.value.name,
+                    color = body.value.color,
+                    tags = body.value.tags,
+                    notes = body.value.notes,
+                    requestId = call.requestId(),
+                )
+                MutationResponse(201, PROTOCOL_JSON.encodeToJsonElement(marker.toDto()))
+            }
+        }
+
+        patch("/api/v1/workspaces/{workspaceId}/markers/{markerId}") {
+            val principal = call.authenticate(service)
+            val workspaceId = canonicalUuid(call.parameters["workspaceId"])
+            authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.MARKER_WRITE)
+            val markerId = canonicalUuid(call.parameters["markerId"])
+            val body = call.receiveStrictJson<UpdateSharedMarkerRequest>()
+            call.executeMutation(
+                service,
+                principal,
+                call.requireIdempotencyKey(),
+                mutationFingerprint(
+                    "PATCH",
+                    "/api/v1/workspaces/$workspaceId/markers/$markerId",
+                    body.json,
+                ),
+                requiredCapability = WorkspaceCapability.MARKER_WRITE,
+            ) { connection ->
+                call.enforceMarkerWriteRate(rateLimiter, principal)
+                val marker = markerService.update(
+                    connection = connection,
+                    actor = principal,
+                    markerId = markerId,
+                    expectedVersion = body.value.expectedVersion,
+                    name = body.value.name,
+                    color = body.value.color,
+                    tags = body.value.tags,
+                    notes = body.value.notes,
+                    requestId = call.requestId(),
+                )
+                MutationResponse(200, PROTOCOL_JSON.encodeToJsonElement(marker.toDto()))
+            }
+        }
+
+        delete("/api/v1/workspaces/{workspaceId}/markers/{markerId}") {
+            val principal = call.authenticate(service)
+            val workspaceId = canonicalUuid(call.parameters["workspaceId"])
+            authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.MARKER_WRITE)
+            val markerId = canonicalUuid(call.parameters["markerId"])
+            val expectedVersion = call.request.queryParameters["expectedVersion"]?.toLongOrNull()
+                ?: throw ServiceException(400, "INVALID_ARGUMENT", "expectedVersion is required.")
+            call.executeMutation(
+                service,
+                principal,
+                call.requireIdempotencyKey(),
+                mutationFingerprint(
+                    "DELETE",
+                    "/api/v1/workspaces/$workspaceId/markers/$markerId",
+                    versionQuery = expectedVersion,
+                ),
+                requiredCapability = WorkspaceCapability.MARKER_WRITE,
+            ) { connection ->
+                call.enforceMarkerWriteRate(rateLimiter, principal)
+                markerService.delete(connection, principal, markerId, expectedVersion, call.requestId())
+                MutationResponse(204, null)
+            }
+        }
     }
 
     get("/api/v1/workspaces/{workspaceId}/members") {
@@ -321,6 +423,7 @@ private suspend fun ApplicationCall.executeMutation(
     fingerprint: ByteArray,
     requiredCapability: WorkspaceCapability,
     nonReplayableSecretResponse: Boolean = false,
+    beforeRespond: ApplicationCall.(IdempotentMutationResult) -> Unit = {},
     operation: (java.sql.Connection) -> MutationResponse,
 ) {
     val result = try {
@@ -335,6 +438,7 @@ private suspend fun ApplicationCall.executeMutation(
     } finally {
         fingerprint.fill(0)
     }
+    beforeRespond(result)
     respondMutation(result)
 }
 
@@ -367,6 +471,16 @@ private fun ApplicationCall.enforceAdminWriteRate(
     rateLimiter,
     "admin-write:${principal.tokenId}",
     RateLimits.ADMIN_WRITES_PER_MINUTE,
+    RateLimits.MINUTE,
+)
+
+private fun ApplicationCall.enforceMarkerWriteRate(
+    rateLimiter: RateLimiter,
+    principal: AuthenticationPrincipal,
+) = enforceRate(
+    rateLimiter,
+    "marker-write:${principal.tokenId}",
+    RateLimits.MARKER_WRITES_PER_MINUTE,
     RateLimits.MINUTE,
 )
 

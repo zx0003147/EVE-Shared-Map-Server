@@ -1,10 +1,8 @@
 # EVE Shared Map Server
 
-EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. Phase 2 provides the identity,
-Workspace, membership, invite, device-token, authentication, authorization, audit, and idempotency foundation.
-
-Shared Marker storage and CRUD are deliberately not implemented yet. The Map desktop repository is not a dependency
-of this server and remains usable without it.
+EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. Phase 3 provides the identity,
+Workspace, membership, invite, device-token, authentication, authorization, audit, idempotency, and complete Shared
+Marker server API. The Map desktop repository is not a dependency of this server and remains usable without it.
 
 ## Prerequisites
 
@@ -100,12 +98,12 @@ response replay.
 ## Workspace roles
 
 - `VIEWER`: authenticate and read self/Workspace data.
-- `EDITOR`: Viewer capabilities plus future Shared Marker writes; Marker APIs do not exist in Phase 2.
+- `EDITOR`: Viewer capabilities plus Shared Marker create, update, and delete.
 - `ADMIN`: Editor capabilities plus member, invite, role, membership, and device administration.
 
 The final active Admin cannot be downgraded or removed.
 
-## Implemented Phase 2 endpoints
+## Implemented Phase 3 endpoints
 
 - `GET /health`
 - `GET /api/v1/meta`
@@ -115,6 +113,9 @@ The final active Admin cannot be downgraded or removed.
 - `DELETE /api/v1/me/devices/{tokenId}`
 - `GET /api/v1/workspaces`
 - `GET /api/v1/workspaces/{workspaceId}`
+- `GET|POST /api/v1/workspaces/{workspaceId}/markers`
+- `PATCH /api/v1/workspaces/{workspaceId}/markers/{markerId}`
+- `DELETE /api/v1/workspaces/{workspaceId}/markers/{markerId}?expectedVersion={version}`
 - `GET|POST /api/v1/workspaces/{workspaceId}/members`
 - `PATCH|DELETE /api/v1/workspaces/{workspaceId}/members/{memberId}`
 - `GET /api/v1/workspaces/{workspaceId}/members/{memberId}/devices`
@@ -123,8 +124,20 @@ The final active Admin cannot be downgraded or removed.
 - `POST /api/v1/workspaces/{workspaceId}/members/{memberId}/invites`
 - `DELETE /api/v1/workspaces/{workspaceId}/invites/{inviteId}`
 
-All authenticated mutations require a canonical UUID `Idempotency-Key`, except invite exchange. No Marker endpoint is
-implemented or advertised. `/api/v1/meta.features` is `members`, `invites`, and `device-revocation` only.
+All authenticated mutations require a canonical UUID `Idempotency-Key`, except invite exchange. Marker create,
+update, and delete use ordinary replayable 24-hour idempotency; update/delete also require optimistic-lock versions.
+`/api/v1/meta` advertises `shared-markers` and the packaged universe build.
+
+## Solar-system allowlist
+
+The server validates every marker `systemId` against a compact immutable resource generated from the official CCP
+EVE Online JSONL SDE. The current packaged resource contains 8,490 canonical IDs from build `3466501` and exposes
+`universeBuild: sde-3466501` through `/api/v1/meta`. It does not contain the full SDE, connect to the Map database,
+call ESI, or use the network at runtime. Missing, empty, duplicate, count-mismatched, or metadata-free resources fail
+server startup.
+
+Generation provenance, hashes, the deterministic update command, and verification steps are documented in
+[`docs/SOLAR-SYSTEM-ALLOWLIST.md`](docs/SOLAR-SYSTEM-ALLOWLIST.md).
 
 ## Run the server
 
@@ -140,14 +153,14 @@ implemented or advertised. `/api/v1/meta.features` is `members`, `invites`, and 
 .\gradlew.bat --no-daemon --console=plain clean build
 ```
 
-The suite includes unit, Ktor HTTP, real PostgreSQL 18.6 Testcontainers, migration upgrade, concurrency, authorization,
-security, secret-storage, and end-to-end authentication tests. A Phase 2 acceptance run requires Docker and must have
-zero skipped PostgreSQL tests.
+The suite includes unit, Ktor HTTP, real PostgreSQL 18.6 Testcontainers, V1→V2→V3 migration upgrade, Marker
+concurrency, optimistic locking, authorization, allowlist, security, secret-storage, and end-to-end Marker lifecycle
+tests. Phase 3 acceptance requires Docker and must have zero skipped PostgreSQL tests.
 
 ## Docker workflow
 
 ```powershell
-docker build -t eve-shared-map-server:phase2 .
+docker build -t eve-shared-map-server:phase3 .
 docker compose -f docker-compose.dev.yml --profile server up --build -d
 docker compose -f docker-compose.dev.yml --profile server down
 ```
@@ -159,11 +172,13 @@ tmpfs. PostgreSQL state remains in the named dev volume unless the operator expl
 ## Migrations, audit, and logging
 
 Flyway runs synchronously before Ktor becomes ready. `V1__skeleton.sql` is the Phase 1 baseline;
-`V2__workspace_authentication.sql` creates only Phase 2 identity/auth tables. Flyway clean and automatic repair remain
-disabled.
+`V2__workspace_authentication.sql` creates only Phase 2 identity/auth tables, and
+`V3__shared_markers.sql` adds the frozen Shared Marker table, constraints, and indexes. Flyway clean and automatic
+repair remain disabled.
 
-Audit events are append-only and contain event-time actor identity plus safe metadata. They never contain bearer
-tokens, invite secrets, hashes, Authorization headers, database passwords, or request bodies.
+Audit events are append-only and contain event-time actor identity plus safe metadata. Marker rows are hard deleted,
+while `MARKER_CREATED`, `MARKER_UPDATED`, and `MARKER_DELETED` audit events remain. Audit never contains complete
+marker notes, bearer tokens, invite secrets, hashes, Authorization headers, database passwords, or request bodies.
 
 Logs are JSON Lines on stdout. Access logs contain bounded request ID, method, route template, status, and duration;
 they omit query strings, headers, cookies, and request/response bodies.

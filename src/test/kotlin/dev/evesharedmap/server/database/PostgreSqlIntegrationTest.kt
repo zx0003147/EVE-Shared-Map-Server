@@ -30,10 +30,10 @@ class PostgreSqlIntegrationTest {
             val first = FlywayMigrator(dataSource).migrateAndValidate()
             val second = FlywayMigrator(dataSource).migrateAndValidate()
 
-            assertEquals(2, first.migrationsExecuted)
-            assertEquals("2", first.currentVersion)
+            assertEquals(3, first.migrationsExecuted)
+            assertEquals("3", first.currentVersion)
             assertEquals(0, second.migrationsExecuted)
-            assertEquals("2", second.currentVersion)
+            assertEquals("3", second.currentVersion)
             assertTrue(runBlocking { DatabaseReadiness(dataSource).databaseReady() })
             assertEquals(
                 setOf(
@@ -45,6 +45,7 @@ class PostgreSqlIntegrationTest {
                     "access_tokens",
                     "audit_events",
                     "idempotency_records",
+                    "shared_markers",
                 ),
                 publicTables(dataSource),
             )

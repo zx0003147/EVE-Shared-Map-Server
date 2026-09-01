@@ -52,6 +52,7 @@ object RateLimits {
     const val INVITE_EXCHANGE_PER_MINUTE = 5
     const val INVITE_EXCHANGE_PER_DAY = 20
     const val AUTHENTICATED_READS_PER_MINUTE = 120
+    const val MARKER_WRITES_PER_MINUTE = 30
     const val ADMIN_WRITES_PER_MINUTE = 20
     const val PUBLIC_READS_PER_MINUTE = 60
 }

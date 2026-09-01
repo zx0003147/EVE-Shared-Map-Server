@@ -14,10 +14,12 @@ data class MetaResponse(
     val minimumClientProtocolVersion: Int,
     val maximumClientProtocolVersion: Int,
     val features: List<String>,
+    val universeBuild: String,
 )
 
 fun Route.metaRoutes(
     serverVersion: String,
+    universeBuild: String,
     beforeRequest: suspend io.ktor.server.application.ApplicationCall.() -> Unit = {},
 ) {
     get("/api/v1/meta") {
@@ -28,7 +30,8 @@ fun Route.metaRoutes(
                 protocolVersion = PROTOCOL_VERSION,
                 minimumClientProtocolVersion = PROTOCOL_VERSION,
                 maximumClientProtocolVersion = PROTOCOL_VERSION,
-                features = listOf("members", "invites", "device-revocation"),
+                features = listOf("shared-markers", "members", "invites", "device-revocation"),
+                universeBuild = universeBuild,
             ),
         )
     }

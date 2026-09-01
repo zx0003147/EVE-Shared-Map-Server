@@ -385,11 +385,12 @@ class SharedMapService(
         }
 
         val response = operation(connection)
-        connection.prepareStatement(
+        val storedBody = connection.prepareStatement(
             """
             UPDATE idempotency_records
             SET state = 'COMPLETED', response_status = ?, response_body = CAST(? AS jsonb)
             WHERE token_id = ? AND idempotency_key = ?
+            RETURNING response_body::text
             """.trimIndent(),
         ).use { statement ->
             statement.setInt(1, response.status)
@@ -397,9 +398,17 @@ class SharedMapService(
             else statement.setString(2, response.storageBody.toString())
             statement.setObject(3, tokenId)
             statement.setObject(4, idempotencyKey)
-            check(statement.executeUpdate() == 1)
+            statement.executeQuery().use { result ->
+                check(result.next())
+                result.getString(1)?.let(Json::parseToJsonElement)
+            }
         }
-        IdempotentMutationResult(response, replayed = false)
+        val canonicalResponse = if (!nonReplayableSecretResponse && response.responseBody != null) {
+            response.copy(responseBody = storedBody)
+        } else {
+            response
+        }
+        IdempotentMutationResult(canonicalResponse, replayed = false)
     }
 
     fun createMember(

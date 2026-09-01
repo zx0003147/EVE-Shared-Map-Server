@@ -69,7 +69,7 @@ class Phase2PostgreSqlIntegrationTest {
     lateinit var tempDirectory: Path
 
     @Test
-    fun `Phase 1 schema upgrades to Phase 2 exactly once`() {
+    fun `Phase 1 schema upgrades through Phase 3 exactly once`() {
         val bundle = newBundle(migrate = false)
         bundle.use {
             val v1Directory = tempDirectory.resolve("v1")
@@ -86,10 +86,10 @@ class Phase2PostgreSqlIntegrationTest {
             val upgrade = FlywayMigrator(bundle.dataSource, schemas = arrayOf(bundle.schema)).migrateAndValidate()
             val repeat = FlywayMigrator(bundle.dataSource, schemas = arrayOf(bundle.schema)).migrateAndValidate()
 
-            assertEquals(1, upgrade.migrationsExecuted)
-            assertEquals("2", upgrade.currentVersion)
+            assertEquals(2, upgrade.migrationsExecuted)
+            assertEquals("3", upgrade.currentVersion)
             assertEquals(0, repeat.migrationsExecuted)
-            assertEquals(7, bundle.businessTables().size)
+            assertEquals(8, bundle.businessTables().size)
         }
     }
 
@@ -595,7 +595,7 @@ class Phase2PostgreSqlIntegrationTest {
                     connection.createStatement().use { it.executeUpdate("UPDATE audit_events SET action = 'TAMPERED'") }
                 }
             }
-            assertFalse(bundle.businessTables().contains("shared_markers"))
+            assertTrue(bundle.businessTables().contains("shared_markers"))
         }
     }
 

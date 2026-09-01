@@ -7,9 +7,12 @@ import dev.evesharedmap.server.database.FlywayMigrator
 import dev.evesharedmap.server.health.DatabaseReadiness
 import dev.evesharedmap.server.http.configureHttp
 import dev.evesharedmap.server.logging.logSanitizedError
+import dev.evesharedmap.server.marker.SharedMarkerService
+import dev.evesharedmap.server.marker.SharedMarkerValidation
 import dev.evesharedmap.server.security.CredentialHasher
 import dev.evesharedmap.server.service.ServiceException
 import dev.evesharedmap.server.service.SharedMapService
+import dev.evesharedmap.server.universe.SolarSystemAllowlist
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import org.slf4j.LoggerFactory
@@ -49,7 +52,7 @@ internal fun runBootstrapAdmin(
     }
 
     return try {
-        withApplicationServices(environment) { _, service, _ ->
+        withApplicationServices(environment) { _, service, _, _ ->
             val result = service.bootstrapAdmin(options.displayName, options.workspaceName, options.inviteLifetime)
             out.println("Bootstrap completed.")
             out.println("userId=${result.userId}")
@@ -79,7 +82,7 @@ private fun runServer() {
 
     try {
         logger.info("event=startup stage=configuration")
-        withApplicationServices(System.getenv()) { resources, service, migration ->
+        withApplicationServices(System.getenv()) { resources, service, markerService, migration ->
             val config = resources.config
             val dataSource = resources.dataSource
             logger.info("event=startup stage=database_validation")
@@ -98,6 +101,8 @@ private fun runServer() {
                     readinessProbe = DatabaseReadiness(dataSource),
                     serverVersion = BuildInfo.serverVersion,
                     sharedMapService = service,
+                    sharedMarkerService = markerService,
+                    universeBuild = markerService.universeBuild,
                 )
             }
 
@@ -120,7 +125,12 @@ private fun runServer() {
 
 private inline fun <T> withApplicationServices(
     environment: Map<String, String>,
-    block: (ApplicationResources, SharedMapService, dev.evesharedmap.server.database.MigrationSummary) -> T,
+    block: (
+        ApplicationResources,
+        SharedMapService,
+        SharedMarkerService,
+        dev.evesharedmap.server.database.MigrationSummary,
+    ) -> T,
 ): T {
     val config = ServerConfig.load(environment)
     val hasher = try {
@@ -140,7 +150,13 @@ private inline fun <T> withApplicationServices(
     return try {
         DatabaseFactory.validateConnectivity(dataSource)
         val migration = FlywayMigrator(dataSource).migrateAndValidate()
-        block(resources, SharedMapService(dataSource, hasher), migration)
+        val allowlist = SolarSystemAllowlist.load()
+        block(
+            resources,
+            SharedMapService(dataSource, hasher),
+            SharedMarkerService(dataSource, SharedMarkerValidation(allowlist)),
+            migration,
+        )
     } finally {
         resources.close()
     }
