@@ -1,9 +1,16 @@
 package dev.evesharedmap.server.http
 
+import dev.evesharedmap.server.api.sharedMapRoutes
 import dev.evesharedmap.server.health.ReadinessProbe
 import dev.evesharedmap.server.health.healthRoutes
 import dev.evesharedmap.server.logging.installStructuredAccessLogging
 import dev.evesharedmap.server.meta.metaRoutes
+import dev.evesharedmap.server.security.InMemoryTokenBucketRateLimiter
+import dev.evesharedmap.server.security.RateLimiter
+import dev.evesharedmap.server.security.RateLimits
+import dev.evesharedmap.server.service.ServiceException
+import dev.evesharedmap.server.service.SharedMapService
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -15,12 +22,15 @@ import io.ktor.server.plugins.PayloadTooLargeException
 import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.origin
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.routing
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import java.time.Clock
 
 private const val MAX_REQUEST_BODY_BYTES = 32L * 1024L
@@ -30,12 +40,16 @@ data class ApiErrorResponse(
     val code: String,
     val message: String,
     val requestId: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val details: JsonObject? = null,
 )
 
 fun Application.configureHttp(
     readinessProbe: ReadinessProbe,
     serverVersion: String,
     clock: Clock = Clock.systemUTC(),
+    sharedMapService: SharedMapService? = null,
+    rateLimiter: RateLimiter = InMemoryTokenBucketRateLimiter(clock),
     additionalRoutes: Routing.() -> Unit = {},
 ) {
     installRequestIdPlugin()
@@ -45,7 +59,7 @@ fun Application.configureHttp(
         json(
             Json {
                 encodeDefaults = true
-                explicitNulls = false
+                explicitNulls = true
                 ignoreUnknownKeys = false
             },
         )
@@ -56,6 +70,17 @@ fun Application.configureHttp(
     }
 
     install(StatusPages) {
+        exception<ServiceException> { call, error ->
+            if (error.status == HttpStatusCode.Unauthorized.value) {
+                call.response.headers.append(HttpHeaders.WWWAuthenticate, "Bearer")
+            }
+            call.respondSafeError(
+                status = HttpStatusCode.fromValue(error.status),
+                code = error.code,
+                message = error.safeMessage,
+                details = error.details,
+            )
+        }
         exception<PayloadTooLargeException> { call, _ ->
             call.respondSafeError(
                 status = HttpStatusCode.PayloadTooLarge,
@@ -101,8 +126,21 @@ fun Application.configureHttp(
     }
 
     routing {
-        healthRoutes(readinessProbe, serverVersion, clock)
-        metaRoutes(serverVersion)
+        val publicRateGuard: suspend io.ktor.server.application.ApplicationCall.() -> Unit = {
+            val remote = request.origin.remoteHost
+            val decision = rateLimiter.consume(
+                "public:$remote",
+                RateLimits.PUBLIC_READS_PER_MINUTE,
+                RateLimits.MINUTE,
+            )
+            if (!decision.allowed) {
+                response.headers.append(HttpHeaders.RetryAfter, decision.retryAfterSeconds.toString())
+                throw ServiceException(429, "RATE_LIMITED", "The request rate limit was exceeded.")
+            }
+        }
+        healthRoutes(readinessProbe, serverVersion, clock, publicRateGuard)
+        metaRoutes(serverVersion, publicRateGuard)
+        if (sharedMapService != null) sharedMapRoutes(sharedMapService, rateLimiter = rateLimiter)
         additionalRoutes()
     }
 }
@@ -111,6 +149,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondSafeError(
     status: HttpStatusCode,
     code: String,
     message: String,
+    details: JsonObject? = null,
 ) {
     respond(
         status,
@@ -118,6 +157,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondSafeError(
             code = code,
             message = message,
             requestId = callId ?: "unavailable",
+            details = details,
         ),
     )
 }

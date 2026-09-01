@@ -34,8 +34,9 @@ class ServerConfigTest {
         assertEquals("<redacted>", config.database.password.toString())
         assertEquals("test", config.environment)
         assertEquals(LogLevel.WARN, config.logLevel)
-        assertEquals(pepperFile, config.reservedTokenPepperFile)
+        assertEquals("<redacted>", config.tokenPepper.toString())
         config.database.password.close()
+        config.tokenPepper.close()
     }
 
     @Test
@@ -45,6 +46,15 @@ class ServerConfigTest {
         val error = assertFailsWith<ConfigurationException> { ServerConfig.load(environment) }
 
         assertEquals("SHARED_MAP_DATABASE_URL is required.", error.message)
+    }
+
+    @Test
+    fun `missing token pepper file is rejected in Phase 2`() {
+        val environment = validEnvironment(writeSecret("local-test-password")) - "SHARED_MAP_TOKEN_PEPPER_FILE"
+
+        val error = assertFailsWith<ConfigurationException> { ServerConfig.load(environment) }
+
+        assertEquals("SHARED_MAP_TOKEN_PEPPER_FILE is required.", error.message)
     }
 
     @Test
@@ -95,6 +105,7 @@ class ServerConfigTest {
         "SHARED_MAP_DATABASE_URL" to "jdbc:postgresql://localhost:54329/eve_shared_map",
         "SHARED_MAP_DATABASE_USER" to "eve_shared_map",
         "SHARED_MAP_DATABASE_PASSWORD_FILE" to passwordFile.toString(),
+        "SHARED_MAP_TOKEN_PEPPER_FILE" to writeSecret("test-only-256-bit-equivalent-pepper", "token-pepper.txt").toString(),
     )
 
     private fun writeSecret(value: String, name: String = "db-password.txt"): Path =

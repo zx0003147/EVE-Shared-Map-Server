@@ -11,7 +11,7 @@ data class ServerConfig(
     val database: DatabaseConfig,
     val environment: String,
     val logLevel: LogLevel,
-    val reservedTokenPepperFile: Path?,
+    val tokenPepper: SecretValue,
 ) {
     companion object {
         private const val DEFAULT_BIND_HOST = "0.0.0.0"
@@ -37,8 +37,19 @@ data class ServerConfig(
                 throw ConfigurationException("SHARED_MAP_DATABASE_URL must be a PostgreSQL JDBC URL.")
             }
             val databaseUser = environment.required("SHARED_MAP_DATABASE_USER")
-            val password = readRequiredSecret(environment.required("SHARED_MAP_DATABASE_PASSWORD_FILE"))
-            val pepperFile = environment.valueOrNull("SHARED_MAP_TOKEN_PEPPER_FILE")?.let(::validateReservedSecretFile)
+            val password = readRequiredSecret(
+                environment.required("SHARED_MAP_DATABASE_PASSWORD_FILE"),
+                "SHARED_MAP_DATABASE_PASSWORD_FILE",
+            )
+            val tokenPepper = try {
+                readRequiredSecret(
+                    environment.required("SHARED_MAP_TOKEN_PEPPER_FILE"),
+                    "SHARED_MAP_TOKEN_PEPPER_FILE",
+                )
+            } catch (error: Throwable) {
+                password.close()
+                throw error
+            }
 
             return ServerConfig(
                 bindHost = bindHost,
@@ -50,34 +61,21 @@ data class ServerConfig(
                 ),
                 environment = environment.valueOrNull("SHARED_MAP_ENVIRONMENT") ?: DEFAULT_ENVIRONMENT,
                 logLevel = LogLevel.parse(environment.valueOrNull("SHARED_MAP_LOG_LEVEL")),
-                reservedTokenPepperFile = pepperFile,
+                tokenPepper = tokenPepper,
             )
         }
 
-        private fun readRequiredSecret(rawPath: String): SecretValue {
-            val path = safePath(rawPath, "SHARED_MAP_DATABASE_PASSWORD_FILE")
-            val bytes = readSecretBytes(path, "SHARED_MAP_DATABASE_PASSWORD_FILE")
+        private fun readRequiredSecret(rawPath: String, key: String): SecretValue {
+            val path = safePath(rawPath, key)
+            val bytes = readSecretBytes(path, key)
             val value = bytes.toString(StandardCharsets.UTF_8).trimEnd('\r', '\n')
             bytes.fill(0)
             if (value.isBlank()) {
                 throw ConfigurationException(
-                    "SHARED_MAP_DATABASE_PASSWORD_FILE must reference a readable, non-empty secret file.",
+                    "$key must reference a readable, non-empty secret file.",
                 )
             }
             return SecretValue.from(value)
-        }
-
-        private fun validateReservedSecretFile(rawPath: String): Path {
-            val path = safePath(rawPath, "SHARED_MAP_TOKEN_PEPPER_FILE")
-            val bytes = readSecretBytes(path, "SHARED_MAP_TOKEN_PEPPER_FILE")
-            val hasContent = bytes.any { byte -> !byte.toInt().toChar().isWhitespace() }
-            bytes.fill(0)
-            if (!hasContent) {
-                throw ConfigurationException(
-                    "SHARED_MAP_TOKEN_PEPPER_FILE must reference a readable, non-empty secret file when configured.",
-                )
-            }
-            return path
         }
 
         private fun safePath(rawPath: String, key: String): Path = try {

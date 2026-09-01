@@ -30,12 +30,24 @@ class PostgreSqlIntegrationTest {
             val first = FlywayMigrator(dataSource).migrateAndValidate()
             val second = FlywayMigrator(dataSource).migrateAndValidate()
 
-            assertEquals(1, first.migrationsExecuted)
-            assertEquals("1", first.currentVersion)
+            assertEquals(2, first.migrationsExecuted)
+            assertEquals("2", first.currentVersion)
             assertEquals(0, second.migrationsExecuted)
-            assertEquals("1", second.currentVersion)
+            assertEquals("2", second.currentVersion)
             assertTrue(runBlocking { DatabaseReadiness(dataSource).databaseReady() })
-            assertEquals(setOf("flyway_schema_history"), publicTables(dataSource))
+            assertEquals(
+                setOf(
+                    "flyway_schema_history",
+                    "users",
+                    "workspaces",
+                    "workspace_members",
+                    "invites",
+                    "access_tokens",
+                    "audit_events",
+                    "idempotency_records",
+                ),
+                publicTables(dataSource),
+            )
         } finally {
             dataSource.close()
         }

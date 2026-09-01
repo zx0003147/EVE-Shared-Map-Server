@@ -25,8 +25,10 @@ fun Route.healthRoutes(
     readinessProbe: ReadinessProbe,
     serverVersion: String,
     clock: Clock = Clock.systemUTC(),
+    beforeRequest: suspend io.ktor.server.application.ApplicationCall.() -> Unit = {},
 ) {
     get("/health") {
+        call.beforeRequest()
         val ready = readinessProbe.databaseReady()
         val response = HealthResponse(
             status = if (ready) "ok" else "unavailable",

@@ -16,15 +16,19 @@ data class MetaResponse(
     val features: List<String>,
 )
 
-fun Route.metaRoutes(serverVersion: String) {
+fun Route.metaRoutes(
+    serverVersion: String,
+    beforeRequest: suspend io.ktor.server.application.ApplicationCall.() -> Unit = {},
+) {
     get("/api/v1/meta") {
+        call.beforeRequest()
         call.respond(
             MetaResponse(
                 serverVersion = serverVersion,
                 protocolVersion = PROTOCOL_VERSION,
                 minimumClientProtocolVersion = PROTOCOL_VERSION,
                 maximumClientProtocolVersion = PROTOCOL_VERSION,
-                features = emptyList(),
+                features = listOf("members", "invites", "device-revocation"),
             ),
         )
     }
