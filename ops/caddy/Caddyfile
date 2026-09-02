@@ -1,0 +1,16 @@
+{
+	email {$SHARED_MAP_ACME_EMAIL}
+}
+
+{$SHARED_MAP_DOMAIN} {
+	request_body {
+		max_size 32KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+
+	reverse_proxy shared-map-server:8080
+}

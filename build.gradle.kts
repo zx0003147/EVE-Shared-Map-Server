@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "dev.evesharedmap"
-version = "0.1.0-SNAPSHOT"
+version = "0.1.0"
 
 kotlin {
     jvmToolchain(25)
@@ -51,7 +51,7 @@ dependencyLocking {
 
 tasks.processResources {
     filesMatching("server-version.properties") {
-        expand("serverVersion" to "0.1.0-SNAPSHOT")
+        expand("serverVersion" to "0.1.0")
     }
 }
 

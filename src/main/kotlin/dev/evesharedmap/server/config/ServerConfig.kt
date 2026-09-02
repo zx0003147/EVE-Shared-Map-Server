@@ -36,7 +36,7 @@ data class ServerConfig(
             if (!databaseUrl.startsWith("jdbc:postgresql://")) {
                 throw ConfigurationException("SHARED_MAP_DATABASE_URL must be a PostgreSQL JDBC URL.")
             }
-            val databaseUser = environment.required("SHARED_MAP_DATABASE_USER")
+            val databaseUser = readDatabaseUser(environment)
             val password = readRequiredSecret(
                 environment.required("SHARED_MAP_DATABASE_PASSWORD_FILE"),
                 "SHARED_MAP_DATABASE_PASSWORD_FILE",
@@ -63,6 +63,34 @@ data class ServerConfig(
                 logLevel = LogLevel.parse(environment.valueOrNull("SHARED_MAP_LOG_LEVEL")),
                 tokenPepper = tokenPepper,
             )
+        }
+
+        private fun readDatabaseUser(environment: Map<String, String>): String {
+            val directValue = environment.valueOrNull("SHARED_MAP_DATABASE_USER")
+            val filePath = environment.valueOrNull("SHARED_MAP_DATABASE_USER_FILE")
+            if (directValue != null && filePath != null) {
+                throw ConfigurationException(
+                    "Set only one of SHARED_MAP_DATABASE_USER or SHARED_MAP_DATABASE_USER_FILE.",
+                )
+            }
+            if (filePath == null) {
+                return directValue ?: throw ConfigurationException(
+                    "SHARED_MAP_DATABASE_USER or SHARED_MAP_DATABASE_USER_FILE is required.",
+                )
+            }
+
+            val bytes = readSecretBytes(
+                safePath(filePath, "SHARED_MAP_DATABASE_USER_FILE"),
+                "SHARED_MAP_DATABASE_USER_FILE",
+            )
+            val value = bytes.toString(StandardCharsets.UTF_8).trimEnd('\r', '\n')
+            bytes.fill(0)
+            if (value.isBlank()) {
+                throw ConfigurationException(
+                    "SHARED_MAP_DATABASE_USER_FILE must reference a readable, non-empty file.",
+                )
+            }
+            return value
         }
 
         private fun readRequiredSecret(rawPath: String, key: String): SecretValue {

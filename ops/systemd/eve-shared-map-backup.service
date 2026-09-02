@@ -1,0 +1,11 @@
+[Unit]
+Description=Encrypted EVE Shared Map PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/eve-shared-map
+ExecStart=/usr/bin/docker compose --env-file /opt/eve-shared-map/.env.production -f /opt/eve-shared-map/docker-compose.prod.yml --profile ops run --rm backup
+User=eve-map
+Group=eve-map

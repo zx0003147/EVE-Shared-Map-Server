@@ -1,0 +1,6 @@
+# Phase 8A only: expose the application on a random IPv4 loopback port for the real Map client E2E.
+# Never include this override in production deployment.
+services:
+  shared-map-server:
+    ports:
+      - "127.0.0.1:${SHARED_MAP_VALIDATION_SERVER_PORT:?Set a validation-only loopback port}:8080"

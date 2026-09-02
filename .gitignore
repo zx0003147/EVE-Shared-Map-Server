@@ -8,12 +8,17 @@ out/
 .env
 .env.*
 !.env.example
+!.env.production.example
 .secrets/
 secrets/
 *.log
 logs/
 *.dump
 *.sql.gz
+*.dump.gpg
+*.dump.gpg.sha256
+backups-local-staging/
+.phase8a-validation-*/
 docker-data/
 hs_err_pid*
 replay_pid*

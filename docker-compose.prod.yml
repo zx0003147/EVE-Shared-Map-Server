@@ -1,0 +1,235 @@
+name: eve-shared-map-prod
+
+x-logging: &bounded-json-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: ${SHARED_MAP_POSTGRES_IMAGE:?Set SHARED_MAP_POSTGRES_IMAGE in the production env file}
+    environment:
+      POSTGRES_DB: ${SHARED_MAP_DATABASE_NAME:?Set SHARED_MAP_DATABASE_NAME in the production env file}
+      POSTGRES_USER_FILE: /run/secrets/db_username
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - source: postgres_db_username
+        target: db_username
+      - source: postgres_db_password
+        target: db_password
+    expose:
+      - "5432"
+    networks:
+      - database
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$(cat /run/secrets/db_username)\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: ${SHARED_MAP_POSTGRES_MEMORY_LIMIT:-768m}
+    cpus: ${SHARED_MAP_POSTGRES_CPU_LIMIT:-1.0}
+    logging: *bounded-json-logging
+
+  shared-map-server:
+    image: ${SHARED_MAP_SERVER_IMAGE:?Set SHARED_MAP_SERVER_IMAGE to an exact non-latest tag}
+    environment:
+      SHARED_MAP_BIND_HOST: 0.0.0.0
+      SHARED_MAP_PORT: 8080
+      SHARED_MAP_DATABASE_URL: jdbc:postgresql://postgres:5432/${SHARED_MAP_DATABASE_NAME:?Set SHARED_MAP_DATABASE_NAME in the production env file}
+      SHARED_MAP_DATABASE_USER_FILE: /run/secrets/db_username
+      SHARED_MAP_DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      SHARED_MAP_TOKEN_PEPPER_FILE: /run/secrets/token_pepper
+      SHARED_MAP_ENVIRONMENT: production
+      SHARED_MAP_LOG_LEVEL: ${SHARED_MAP_LOG_LEVEL:-INFO}
+    secrets:
+      - source: server_db_username
+        target: db_username
+      - source: server_db_password
+        target: db_password
+      - token_pepper
+    expose:
+      - "8080"
+    networks:
+      - edge
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp/eve-shared-map:size=64m,mode=1777,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 20s
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: ${SHARED_MAP_SERVER_MEMORY_LIMIT:-768m}
+    cpus: ${SHARED_MAP_SERVER_CPU_LIMIT:-1.0}
+    logging: *bounded-json-logging
+
+  caddy:
+    image: ${SHARED_MAP_CADDY_IMAGE:?Set SHARED_MAP_CADDY_IMAGE to an exact non-latest tag}
+    environment:
+      SHARED_MAP_DOMAIN: ${SHARED_MAP_DOMAIN:?Set the production domain}
+      SHARED_MAP_ACME_EMAIL: ${SHARED_MAP_ACME_EMAIL:?Set the ACME contact email}
+    ports:
+      - "${SHARED_MAP_HTTP_PORT:-80}:80"
+      - "${SHARED_MAP_HTTPS_PORT:-443}:443"
+    networks:
+      - edge
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      shared-map-server:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: ${SHARED_MAP_CADDY_MEMORY_LIMIT:-256m}
+    cpus: ${SHARED_MAP_CADDY_CPU_LIMIT:-0.5}
+    logging: *bounded-json-logging
+
+  backup:
+    profiles: ["ops"]
+    image: ${SHARED_MAP_OPS_IMAGE:?Set SHARED_MAP_OPS_IMAGE to an exact non-latest tag}
+    entrypoint: ["/usr/local/bin/backup.sh"]
+    environment:
+      SHARED_MAP_DATABASE_HOST: postgres
+      SHARED_MAP_DATABASE_PORT: 5432
+      SHARED_MAP_DATABASE_NAME: ${SHARED_MAP_DATABASE_NAME:?Set SHARED_MAP_DATABASE_NAME in the production env file}
+      SHARED_MAP_DATABASE_USER_FILE: /run/secrets/db_username
+      SHARED_MAP_DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      SHARED_MAP_BACKUP_ENCRYPTION_PASSPHRASE_FILE: /run/secrets/backup_passphrase
+      SHARED_MAP_BACKUP_STAGING_DIR: /backups/staging
+      SHARED_MAP_BACKUP_OFFSITE_DIR: /backups/offsite
+      SHARED_MAP_BACKUP_DAILY_RETENTION: ${SHARED_MAP_BACKUP_DAILY_RETENTION:-30}
+      SHARED_MAP_BACKUP_MONTHLY_RETENTION: ${SHARED_MAP_BACKUP_MONTHLY_RETENTION:-12}
+    secrets:
+      - source: postgres_db_username
+        target: db_username
+      - source: postgres_db_password
+        target: db_password
+      - backup_passphrase
+    networks:
+      - database
+    volumes:
+      - type: bind
+        source: ${SHARED_MAP_BACKUP_STAGING_HOST_DIR:?Set an absolute local staging directory}
+        target: /backups/staging
+      - type: bind
+        source: ${SHARED_MAP_BACKUP_OFFSITE_HOST_DIR:?Set an off-site mounted directory}
+        target: /backups/offsite
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777,uid=70,gid=70
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${SHARED_MAP_OPS_MEMORY_LIMIT:-512m}
+    cpus: ${SHARED_MAP_OPS_CPU_LIMIT:-1.0}
+    logging: *bounded-json-logging
+
+  restore:
+    profiles: ["ops"]
+    image: ${SHARED_MAP_OPS_IMAGE:?Set SHARED_MAP_OPS_IMAGE to an exact non-latest tag}
+    entrypoint: ["/usr/local/bin/restore.sh"]
+    environment:
+      SHARED_MAP_DATABASE_HOST: postgres
+      SHARED_MAP_DATABASE_PORT: 5432
+      SHARED_MAP_DATABASE_USER_FILE: /run/secrets/db_username
+      SHARED_MAP_DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      SHARED_MAP_BACKUP_ENCRYPTION_PASSPHRASE_FILE: /run/secrets/backup_passphrase
+      SHARED_MAP_EXPECTED_FLYWAY_VERSION: ${SHARED_MAP_EXPECTED_FLYWAY_VERSION:-3}
+      SHARED_MAP_ENVIRONMENT: ${SHARED_MAP_RESTORE_ENVIRONMENT:-validation}
+    secrets:
+      - source: postgres_db_username
+        target: db_username
+      - source: postgres_db_password
+        target: db_password
+      - backup_passphrase
+    networks:
+      - database
+    volumes:
+      - type: bind
+        source: ${SHARED_MAP_BACKUP_STAGING_HOST_DIR:?Set an absolute local staging directory}
+        target: /backups/staging
+        read_only: true
+      - type: bind
+        source: ${SHARED_MAP_BACKUP_OFFSITE_HOST_DIR:?Set an off-site mounted directory}
+        target: /backups/offsite
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777,uid=70,gid=70
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${SHARED_MAP_OPS_MEMORY_LIMIT:-512m}
+    cpus: ${SHARED_MAP_OPS_CPU_LIMIT:-1.0}
+    logging: *bounded-json-logging
+
+secrets:
+  postgres_db_username:
+    file: ${SHARED_MAP_POSTGRES_DATABASE_USER_FILE:?Set the UID 70 database username file}
+  postgres_db_password:
+    file: ${SHARED_MAP_POSTGRES_DATABASE_PASSWORD_FILE:?Set the UID 70 database password file}
+  server_db_username:
+    file: ${SHARED_MAP_SERVER_DATABASE_USER_FILE:?Set the UID 10001 database username file}
+  server_db_password:
+    file: ${SHARED_MAP_SERVER_DATABASE_PASSWORD_FILE:?Set the UID 10001 database password file}
+  token_pepper:
+    file: ${SHARED_MAP_TOKEN_PEPPER_FILE:?Set SHARED_MAP_TOKEN_PEPPER_FILE in the production env file}
+  backup_passphrase:
+    file: ${SHARED_MAP_BACKUP_PASSPHRASE_FILE:?Set SHARED_MAP_BACKUP_PASSPHRASE_FILE in the production env file}
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  edge:
+  database:
+    internal: true

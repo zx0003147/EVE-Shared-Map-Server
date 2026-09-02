@@ -40,6 +40,34 @@ class ServerConfigTest {
     }
 
     @Test
+    fun `database username can be loaded from a mounted file`() {
+        val passwordFile = writeSecret("local-test-password")
+        val usernameFile = writeSecret("file_user\n", "db-user.txt")
+
+        val config = ServerConfig.load(
+            validEnvironment(passwordFile) - "SHARED_MAP_DATABASE_USER" +
+                ("SHARED_MAP_DATABASE_USER_FILE" to usernameFile.toString()),
+        )
+
+        assertEquals("file_user", config.database.user)
+        config.database.password.close()
+        config.tokenPepper.close()
+    }
+
+    @Test
+    fun `database username environment and file are mutually exclusive`() {
+        val environment = validEnvironment(writeSecret("local-test-password")) +
+            ("SHARED_MAP_DATABASE_USER_FILE" to writeSecret("file_user", "db-user.txt").toString())
+
+        val error = assertFailsWith<ConfigurationException> { ServerConfig.load(environment) }
+
+        assertEquals(
+            "Set only one of SHARED_MAP_DATABASE_USER or SHARED_MAP_DATABASE_USER_FILE.",
+            error.message,
+        )
+    }
+
+    @Test
     fun `missing database URL fails clearly`() {
         val environment = validEnvironment(writeSecret("local-test-password")) - "SHARED_MAP_DATABASE_URL"
 

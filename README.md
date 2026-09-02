@@ -1,6 +1,6 @@
 # EVE Shared Map Server
 
-EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. Phase 3 provides the identity,
+EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. Version 0.1.0 provides the identity,
 Workspace, membership, invite, device-token, authentication, authorization, audit, idempotency, and complete Shared
 Marker server API. The Map desktop repository is not a dependency of this server and remains usable without it.
 
@@ -34,7 +34,8 @@ Runtime configuration:
 | `SHARED_MAP_BIND_HOST` | `0.0.0.0` | Listener bind address |
 | `SHARED_MAP_PORT` | `8080` | Listener port, 1–65535 |
 | `SHARED_MAP_DATABASE_URL` | required | PostgreSQL JDBC URL |
-| `SHARED_MAP_DATABASE_USER` | required | PostgreSQL application user |
+| `SHARED_MAP_DATABASE_USER` | required unless file is set | PostgreSQL application user for local/development use |
+| `SHARED_MAP_DATABASE_USER_FILE` | alternative | Readable non-empty PostgreSQL username file; production uses this instead of the ordinary variable |
 | `SHARED_MAP_DATABASE_PASSWORD_FILE` | required | Readable non-empty database secret file |
 | `SHARED_MAP_TOKEN_PEPPER_FILE` | required | Readable non-empty HMAC pepper secret file |
 | `SHARED_MAP_ENVIRONMENT` | `development` | Environment label |
@@ -155,12 +156,12 @@ Generation provenance, hashes, the deterministic update command, and verificatio
 
 The suite includes unit, Ktor HTTP, real PostgreSQL 18.6 Testcontainers, V1→V2→V3 migration upgrade, Marker
 concurrency, optimistic locking, authorization, allowlist, security, secret-storage, and end-to-end Marker lifecycle
-tests. Phase 3 acceptance requires Docker and must have zero skipped PostgreSQL tests.
+tests. Release acceptance requires Docker and must have zero skipped PostgreSQL tests.
 
 ## Docker workflow
 
 ```powershell
-docker build -t eve-shared-map-server:phase3 .
+docker build -t eve-shared-map-server:0.1.0 .
 docker compose -f docker-compose.dev.yml --profile server up --build -d
 docker compose -f docker-compose.dev.yml --profile server down
 ```
@@ -182,3 +183,15 @@ marker notes, bearer tokens, invite secrets, hashes, Authorization headers, data
 
 Logs are JSON Lines on stdout. Access logs contain bounded request ID, method, route template, status, and duration;
 they omit query strings, headers, cookies, and request/response bodies.
+
+## Production deployment
+
+Production uses the separate [`docker-compose.prod.yml`](docker-compose.prod.yml) topology: Caddy is the only service
+with host ports, the Server runs as UID/GID 10001 with a read-only root filesystem, and PostgreSQL has no host port.
+Images are pinned to explicit release tags through `.env.production`; production must not deploy `latest` or build an
+arbitrary checkout on the VPS.
+
+The production bundle includes file-mounted secrets, bounded Docker log rotation, persistent PostgreSQL/Caddy
+volumes, encrypted checksummed backups, 30-daily/12-monthly retention, guarded restore tooling, a systemd backup
+timer, and schema-aware update/rollback guidance. See
+[`docs/PRODUCTION-DEPLOYMENT.md`](docs/PRODUCTION-DEPLOYMENT.md) before operating a public instance.
