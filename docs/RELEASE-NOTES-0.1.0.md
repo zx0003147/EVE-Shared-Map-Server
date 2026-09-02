@@ -23,7 +23,11 @@ are readable by the server and database administrators; this release is not end-
 
 ## Compatibility
 
+- Server version: `0.1.0`
 - Shared Map protocol: 1
+- Minimum/maximum client protocol: 1 / 1
+- Packaged universe build: `sde-3466501`
+- Flyway schema: 3
 - Supported Map release target: 1.2.0 after production acceptance
 - Shared Markers remain optional; the Map's local-first features work without this server
 - Shared Markers are not exposed to AI/MCP in this release

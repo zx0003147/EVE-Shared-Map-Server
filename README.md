@@ -104,7 +104,7 @@ response replay.
 
 The final active Admin cannot be downgraded or removed.
 
-## Implemented Phase 3 endpoints
+## API v1 endpoints
 
 - `GET /health`
 - `GET /api/v1/meta`
@@ -195,3 +195,14 @@ The production bundle includes file-mounted secrets, bounded Docker log rotation
 volumes, encrypted checksummed backups, 30-daily/12-monthly retention, guarded restore tooling, a systemd backup
 timer, and schema-aware update/rollback guidance. See
 [`docs/PRODUCTION-DEPLOYMENT.md`](docs/PRODUCTION-DEPLOYMENT.md) before operating a public instance.
+
+For a self-hosted release, build and publish the two immutable `0.1.0` images from an approved clean commit, copy
+`docker-compose.prod.yml`, `.env.production.example`, and `ops/` to the host, create an untracked `.env.production`,
+generate the file-mounted secrets, and start the exact image tags through Docker Compose. Caddy obtains and renews the
+public certificate; PostgreSQL and the Ktor application remain on internal Docker networks. Run the production
+readiness validation and configure the documented encrypted off-site backup schedule before inviting users. The full
+commands, permissions, health checks, rollback procedure, and restore drill are in the deployment runbook.
+
+In EVE Static Map Planner 1.2.0, enter the instance origin, for example `https://map.example.com`, under Shared Map
+preferences and exchange a Workspace invite. `/api/v1` is appended by the client. No particular hosted domain is
+required: operators may use any correctly configured HTTPS origin.
