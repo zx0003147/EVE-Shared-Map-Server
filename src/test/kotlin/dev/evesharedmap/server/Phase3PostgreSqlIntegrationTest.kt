@@ -426,16 +426,33 @@ class Phase3PostgreSqlIntegrationTest {
             bundle.execute(
                 "UPDATE workspace_members SET role = 'VIEWER', version = version + 1 WHERE member_id = '${editorA.principal.membership.memberId}'",
             )
+            val viewerRead = client.get("/api/v1/workspaces/$workspaceA/markers") {
+                bearer(editorA.rawSecret)
+            }
+            assertEquals(HttpStatusCode.OK, viewerRead.status)
             val downgraded = client.post("/api/v1/workspaces/$workspaceA/markers") {
                 bearer(editorA.rawSecret); idempotency(); jsonBody(createBody(30002537, "No write", "WHITE", emptyList(), null))
             }
             assertEquals(HttpStatusCode.Forbidden, downgraded.status)
 
-            bundle.execute(
-                "UPDATE workspace_members SET revoked_at = now(), updated_at = now(), version = version + 1 WHERE member_id = '${editorA.principal.membership.memberId}'",
+            val removeMembership = client.delete(
+                "/api/v1/workspaces/$workspaceA/members/${editorA.principal.membership.memberId}?expectedVersion=2",
+            ) {
+                bearer(adminA.rawSecret)
+                idempotency()
+            }
+            assertEquals(HttpStatusCode.NoContent, removeMembership.status)
+            assertEquals(
+                1,
+                bundle.countWhere(
+                    "access_tokens",
+                    "token_id = '${editorA.principal.tokenId}'::uuid AND revoked_at IS NOT NULL",
+                ),
             )
             val revoked = client.get("/api/v1/workspaces/$workspaceA/markers") { bearer(editorA.rawSecret) }
             assertEquals(HttpStatusCode.Forbidden, revoked.status)
+            assertContains(revoked.bodyAsText(), "\"code\":\"FORBIDDEN\"")
+            assertFalse(revoked.bodyAsText().contains("TOKEN_REVOKED"))
             assertEquals(1, bundle.markerService.listSnapshot(workspaceA).markers.size)
             assertEquals(1, bundle.markerService.listSnapshot(workspaceB).markers.size)
         } finally {

@@ -144,11 +144,14 @@ class SharedMapService(
                             storedHash.fill(0)
                         }
                         if (!matches) continue
+                        if (result.instantOrNull("member_revoked_at") != null) {
+                            throw ServiceErrors.forbidden("The Workspace membership is no longer active.")
+                        }
                         if (result.instantOrNull("token_revoked_at") != null) throw ServiceErrors.tokenRevoked()
                         if (!result.getTimestamp("token_expires_at").toInstant().isAfter(now)) {
                             throw ServiceErrors.tokenExpired()
                         }
-                        if (result.instantOrNull("member_revoked_at") != null || result.getString("user_status") != "ACTIVE") {
+                        if (result.getString("user_status") != "ACTIVE") {
                             throw ServiceErrors.forbidden("The Workspace membership is no longer active.")
                         }
 

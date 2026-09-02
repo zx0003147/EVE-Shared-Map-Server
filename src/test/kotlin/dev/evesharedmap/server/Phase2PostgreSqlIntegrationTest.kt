@@ -347,10 +347,9 @@ class Phase2PostgreSqlIntegrationTest {
                 idempotency()
             }
             assertEquals(HttpStatusCode.NoContent, adminRevokeDevice.status)
-            assertEquals(
-                HttpStatusCode.Unauthorized,
-                client.get("/api/v1/me") { bearer(secondEditorToken) }.status,
-            )
+            val explicitlyRevoked = client.get("/api/v1/me") { bearer(secondEditorToken) }
+            assertEquals(HttpStatusCode.Unauthorized, explicitlyRevoked.status)
+            assertContains(explicitlyRevoked.bodyAsText(), "\"code\":\"TOKEN_REVOKED\"")
 
             assertEquals(HttpStatusCode.OK, client.get("/api/v1/me") { bearer(editorToken) }.status)
             assertEquals(HttpStatusCode.OK, client.get("/api/v1/workspaces/$workspaceId") { bearer(editorToken) }.status)
@@ -376,7 +375,9 @@ class Phase2PostgreSqlIntegrationTest {
                 idempotency()
             }
             assertEquals(HttpStatusCode.NoContent, remove.status)
-            assertEquals(HttpStatusCode.Unauthorized, client.get("/api/v1/me") { bearer(editorToken) }.status)
+            val membershipRevoked = client.get("/api/v1/me") { bearer(editorToken) }
+            assertEquals(HttpStatusCode.Forbidden, membershipRevoked.status)
+            assertContains(membershipRevoked.bodyAsText(), "\"code\":\"FORBIDDEN\"")
 
             val adminDevices = client.get("/api/v1/me/devices") { bearer(adminToken) }
             assertEquals(HttpStatusCode.OK, adminDevices.status)
