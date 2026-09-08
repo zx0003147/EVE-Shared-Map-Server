@@ -1,0 +1,58 @@
+name: Publish container images
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve release version
+        id: release
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Publish Server image
+        id: server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/zx0003147/eve-shared-map-server:${{ steps.release.outputs.version }}
+          build-args: |
+            APP_VERSION=${{ steps.release.outputs.version }}
+            VCS_REF=${{ github.sha }}
+      - name: Publish Ops image
+        id: ops
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ops/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/zx0003147/eve-shared-map-ops:${{ steps.release.outputs.version }}
+          build-args: |
+            APP_VERSION=${{ steps.release.outputs.version }}
+            VCS_REF=${{ github.sha }}
+      - name: Record image digests
+        shell: bash
+        run: |
+          echo "Server: ghcr.io/zx0003147/eve-shared-map-server@${{ steps.server.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Ops: ghcr.io/zx0003147/eve-shared-map-ops@${{ steps.ops.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

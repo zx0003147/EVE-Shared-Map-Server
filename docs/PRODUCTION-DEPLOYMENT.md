@@ -35,18 +35,19 @@ Production uses a Git/tag-defined release built on a controlled build host or CI
 explicitly tagged images. The VPS pulls exact image references. It must not edit source, build a random `main`, or
 track `latest`.
 
-The first intended release tags are `eve-shared-map-server:0.1.0` and `eve-shared-map-ops:0.1.0`. Record the Git
-commit, registry reference, image ID, and registry digest in the deployment record. A registry and repository owner
-have not been chosen; do not invent or create either without operator approval.
+The official 0.2.0 release tags are `ghcr.io/zx0003147/eve-shared-map-server:0.2.0` and
+`ghcr.io/zx0003147/eve-shared-map-ops:0.2.0`. Record the Git commit, registry reference, image ID, and registry digest
+in the deployment record. The formal self-hosted manifest pins the corresponding registry digests.
 
 Example controlled builds from a clean, approved release checkout:
 
 ```sh
-docker build --pull --build-arg APP_VERSION=0.1.0 --build-arg VCS_REF=<server-commit> \
-  -t <registry>/eve-shared-map-server:0.1.0 .
-docker build --pull -f ops/Dockerfile -t <registry>/eve-shared-map-ops:0.1.0 .
-docker image inspect <registry>/eve-shared-map-server:0.1.0
-docker image inspect <registry>/eve-shared-map-ops:0.1.0
+docker build --pull --build-arg APP_VERSION=0.2.0 --build-arg VCS_REF=<server-commit> \
+  -t ghcr.io/zx0003147/eve-shared-map-server:0.2.0 .
+docker build --pull -f ops/Dockerfile --build-arg APP_VERSION=0.2.0 --build-arg VCS_REF=<server-commit> \
+  -t ghcr.io/zx0003147/eve-shared-map-ops:0.2.0 .
+docker image inspect ghcr.io/zx0003147/eve-shared-map-server:0.2.0
+docker image inspect ghcr.io/zx0003147/eve-shared-map-ops:0.2.0
 ```
 
 Push and tag only after explicit release authorization. Keep the previous application image available for rollback.
