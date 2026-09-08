@@ -24,6 +24,9 @@ The installer asks for the Shared Marker hostname, Web Map hostname, certificate
 Admin display name. It then shows the two DNS A records to create and waits until both point to the VPS. Everything
 else—official Docker Engine installation, PostgreSQL, Caddy HTTPS, file-mounted secrets, the verified Planner Web
 artifact, exact Server images, Flyway, health checks, exact-origin CORS, and first-Admin bootstrap—is automated.
+If a run is interrupted after it creates the protected installation marker, rerun `sudo ./install.sh --resume`; the
+resume path reuses the same manifest, environment, secrets, database, and staged release and never treats an unknown
+existing deployment as installer-owned.
 
 When installation finishes, save the one-time Admin invite immediately. It is deliberately neither logged nor
 stored. Open the displayed Web Map URL and use the Shared Marker URL with that invite.

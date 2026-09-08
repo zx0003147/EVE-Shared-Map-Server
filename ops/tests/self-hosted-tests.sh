@@ -116,6 +116,51 @@ test_env_generation() {
     ! grep -Eqi '(password|pepper)=.+[^/]$' "$EVE_MAP_HOME/.env.production"
 }
 
+test_resume_guard() {
+    rm -f -- "$EVE_MAP_HOME/.installer-state" "$EVE_MAP_HOME/.installer-in-progress"
+    touch "$EVE_MAP_HOME/.env.production"
+    (INSTALLER_RESUME=1 installer_check_existing) >/dev/null 2>&1 && return 1
+    printf 'installerVersion=1\nreleaseManifestUrl=https://downloads.example.test/release.json\n' >"$EVE_MAP_HOME/.installer-in-progress"
+    INSTALLER_RESUME=1
+    INSTALLER_MANIFEST_OVERRIDDEN=0
+    installer_check_existing || return 1
+    [[ "$EVE_MAP_MANIFEST_URL" == "https://downloads.example.test/release.json" ]] || return 1
+    INSTALLER_RESUME=0
+    rm -f -- "$EVE_MAP_HOME/.env.production" "$EVE_MAP_HOME/.installer-in-progress"
+}
+
+test_resume_environment_lock() {
+    local mock_bin="$TEST_ROOT/mock-resume-bin"
+    mkdir -p "$mock_bin"
+    cat >"$mock_bin/stat" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" && "${2:-}" == "%U:%G:%a" ]]; then
+    printf 'root:eve-map:640\n'
+    exit 0
+fi
+exec /usr/bin/stat "$@"
+EOF
+    chmod +x "$mock_bin/stat"
+    SHARED_MAP_DOMAIN=markers.example.test
+    SHARED_MAP_WEB_DOMAIN=map.example.test
+    RELEASE_SERVER_IMAGE=ghcr.io/example/server:0.1.0
+    RELEASE_OPS_IMAGE=ghcr.io/example/ops:0.1.0
+    RELEASE_FLYWAY_VERSION=3
+    cat >"$EVE_MAP_HOME/.env.production" <<EOF
+SHARED_MAP_DOMAIN=$SHARED_MAP_DOMAIN
+SHARED_MAP_WEB_DOMAIN=$SHARED_MAP_WEB_DOMAIN
+SHARED_MAP_ALLOWED_ORIGINS=https://$SHARED_MAP_WEB_DOMAIN
+SHARED_MAP_SERVER_IMAGE=$RELEASE_SERVER_IMAGE
+SHARED_MAP_OPS_IMAGE=$RELEASE_OPS_IMAGE
+SHARED_MAP_EXPECTED_FLYWAY_VERSION=$RELEASE_FLYWAY_VERSION
+EOF
+    INSTALLER_RESUME=1 PATH="$mock_bin:$PATH" installer_generate_env || return 1
+    sed -i 's|ghcr.io/example/server:0.1.0|ghcr.io/example/server:0.2.0|' "$EVE_MAP_HOME/.env.production"
+    (INSTALLER_RESUME=1 PATH="$mock_bin:$PATH" installer_generate_env) >/dev/null 2>&1 && return 1
+    INSTALLER_RESUME=0
+    rm -f -- "$EVE_MAP_HOME/.env.production"
+}
+
 test_secret_generation() {
     local mock_bin="$TEST_ROOT/mock-secret-bin"
     local target="$TEST_ROOT/generated-secrets"
@@ -266,6 +311,8 @@ run_test 'missing root' test_missing_root
 run_test 'existing install' test_existing_install
 run_test 'DNS mismatch' test_dns_mismatch
 run_test 'environment generation' test_env_generation
+run_test 'guarded resume' test_resume_guard
+run_test 'resume environment lock' test_resume_environment_lock
 run_test 'secret generation' test_secret_generation
 run_test 'valid release manifest' test_valid_release_manifest
 run_test 'invalid release manifest' test_invalid_release_manifest

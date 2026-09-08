@@ -183,6 +183,10 @@ The installer consumes a small release manifest containing `selfHostedVersion`, 
 example under `release/` is non-deployable documentation; a release operator must publish a filled manifest and
 artifact. Generated Web bundles are not committed to this repository.
 
+An interrupted installer-managed run leaves a root-controlled `.installer-in-progress` marker. Run
+`sudo ./install.sh --resume` from the same release checkout; the installer reuses the recorded manifest and existing
+protected state. Fresh install still refuses an environment or deployment that lacks this marker.
+
 ## Deploy
 
 Validate the bundle first:

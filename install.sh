@@ -11,13 +11,16 @@ EVE_MAP_OS_RELEASE="${EVE_MAP_OS_RELEASE:-/etc/os-release}"
 EVE_MAP_MANIFEST_URL="${EVE_MAP_MANIFEST_URL:-https://github.com/zx0003147/EVE-Shared-Map-Server/releases/latest/download/self-hosted-release.json}"
 EVE_MAP_MIN_MEMORY_KIB="${EVE_MAP_MIN_MEMORY_KIB:-2097152}"
 EVE_MAP_MIN_DISK_KIB="${EVE_MAP_MIN_DISK_KIB:-20971520}"
+INSTALLER_RESUME=0
+INSTALLER_MANIFEST_OVERRIDDEN=0
 
 installer_usage() {
     cat <<'EOF'
-Usage: sudo ./install.sh [--manifest-url <https-url>]
+Usage: sudo ./install.sh [--manifest-url <https-url>] [--resume]
 
 Installs a fresh EVE Map self-hosted instance on Ubuntu 24.04 LTS x86_64.
 Existing installations must be updated with: sudo eve-map update
+Use --resume only when a previous installer run explicitly reports an incomplete installation.
 EOF
 }
 
@@ -27,7 +30,12 @@ installer_parse_args() {
             --manifest-url)
                 [[ $# -ge 2 ]] || eve_map_die "--manifest-url requires a value"
                 EVE_MAP_MANIFEST_URL="$2"
+                INSTALLER_MANIFEST_OVERRIDDEN=1
                 shift 2
+                ;;
+            --resume)
+                INSTALLER_RESUME=1
+                shift
                 ;;
             -h|--help)
                 installer_usage
@@ -70,8 +78,22 @@ installer_check_capacity() {
 }
 
 installer_check_existing() {
-    if [[ -e "$EVE_MAP_HOME/.installer-state" || -e "$EVE_MAP_HOME/.env.production" ]]; then
+    local marker="$EVE_MAP_HOME/.installer-in-progress"
+    if [[ -e "$EVE_MAP_HOME/.installer-state" ]]; then
         eve_map_die "Existing installation detected. Use: sudo eve-map update"
+    fi
+    if (( INSTALLER_RESUME )); then
+        [[ -f "$marker" && ! -L "$marker" ]] ||
+            eve_map_die "no installer-managed incomplete installation is available to resume"
+        if (( ! INSTALLER_MANIFEST_OVERRIDDEN )); then
+            local recorded_manifest_url
+            recorded_manifest_url="$(eve_map_read_env releaseManifestUrl "$marker")"
+            [[ -z "$recorded_manifest_url" ]] || EVE_MAP_MANIFEST_URL="$recorded_manifest_url"
+        fi
+        return
+    fi
+    if [[ -e "$marker" || -e "$EVE_MAP_HOME/.env.production" ]]; then
+        eve_map_die "Incomplete installation detected. Resume it with: sudo ./install.sh --resume"
     fi
 }
 
@@ -143,7 +165,11 @@ installer_fetch_release() {
     RELEASE_WORK_ROOT="$(mktemp -d)"
     RELEASE_MANIFEST_FILE="$RELEASE_WORK_ROOT/self-hosted-release.json"
     RELEASE_WEB_ARTIFACT_FILE="$RELEASE_WORK_ROOT/eve-map-web.zip"
-    eve_map_download "$EVE_MAP_MANIFEST_URL" "$RELEASE_MANIFEST_FILE"
+    if (( INSTALLER_RESUME )) && [[ -r "$EVE_MAP_HOME/release/self-hosted-release.json" ]]; then
+        cp -- "$EVE_MAP_HOME/release/self-hosted-release.json" "$RELEASE_MANIFEST_FILE"
+    else
+        eve_map_download "$EVE_MAP_MANIFEST_URL" "$RELEASE_MANIFEST_FILE"
+    fi
     eve_map_release_manifest_load "$RELEASE_MANIFEST_FILE"
     eve_map_download "$RELEASE_WEB_ARTIFACT_URL" "$RELEASE_WEB_ARTIFACT_FILE"
     [[ "$(eve_map_sha256 "$RELEASE_WEB_ARTIFACT_FILE")" == "$RELEASE_WEB_SHA256" ]] ||
@@ -161,6 +187,11 @@ installer_prompt_value() {
 }
 
 installer_collect_answers() {
+    if (( INSTALLER_RESUME )) && [[ -r "$EVE_MAP_HOME/.env.production" ]]; then
+        SHARED_MAP_DOMAIN="$(eve_map_read_env SHARED_MAP_DOMAIN "$EVE_MAP_HOME/.env.production")"
+        SHARED_MAP_WEB_DOMAIN="$(eve_map_read_env SHARED_MAP_WEB_DOMAIN "$EVE_MAP_HOME/.env.production")"
+        SHARED_MAP_ACME_EMAIL="$(eve_map_read_env SHARED_MAP_ACME_EMAIL "$EVE_MAP_HOME/.env.production")"
+    fi
     installer_prompt_value SHARED_MAP_DOMAIN "Shared Marker domain (for example markers.example.com)"
     SHARED_MAP_DOMAIN="${SHARED_MAP_DOMAIN,,}"
     eve_map_validate_hostname "$SHARED_MAP_DOMAIN" || eve_map_die "Shared Marker domain is invalid"
@@ -227,14 +258,23 @@ installer_create_operator_and_directories() {
     install -d -o 70 -g 70 -m 0700 "$EVE_MAP_HOME/backups-offsite"
     install -d -o root -g eve-map -m 0750 "$EVE_MAP_HOME/web" "$EVE_MAP_HOME/web/releases"
     install -d -o root -g eve-map -m 0750 "$EVE_MAP_HOME/release"
+    if (( ! INSTALLER_RESUME )); then
+        printf 'installerVersion=%s\nreleaseManifestUrl=%s\n' \
+            "$EVE_MAP_INSTALLER_VERSION" "$EVE_MAP_MANIFEST_URL" >"$EVE_MAP_HOME/.installer-in-progress"
+        chown root:eve-map "$EVE_MAP_HOME/.installer-in-progress"
+        chmod 0640 "$EVE_MAP_HOME/.installer-in-progress"
+    fi
 }
 
 installer_copy_distribution_files() {
-    [[ ! -e "$EVE_MAP_HOME/ops" ]] || eve_map_die "refusing to replace an existing ops directory during fresh install"
-    [[ ! -e "$EVE_MAP_CLI_PATH" && ! -L "$EVE_MAP_CLI_PATH" ]] ||
-        eve_map_die "refusing to replace an existing eve-map command"
+    if (( ! INSTALLER_RESUME )); then
+        [[ ! -e "$EVE_MAP_HOME/ops" ]] || eve_map_die "refusing to replace an existing ops directory during fresh install"
+        [[ ! -e "$EVE_MAP_CLI_PATH" && ! -L "$EVE_MAP_CLI_PATH" ]] ||
+            eve_map_die "refusing to replace an existing eve-map command"
+    fi
     install -o root -g eve-map -m 0644 "$INSTALLER_SOURCE_ROOT/docker-compose.prod.yml" "$EVE_MAP_HOME/docker-compose.prod.yml"
-    cp -a -- "$INSTALLER_SOURCE_ROOT/ops" "$EVE_MAP_HOME/ops"
+    install -d -o root -g eve-map -m 0750 "$EVE_MAP_HOME/ops"
+    cp -a -- "$INSTALLER_SOURCE_ROOT/ops/." "$EVE_MAP_HOME/ops/"
     find "$EVE_MAP_HOME/ops" -type d -exec chmod 0750 {} +
     find "$EVE_MAP_HOME/ops" -type f -name '*.sh' -exec chmod 0750 {} +
     chmod 0750 "$EVE_MAP_HOME/ops/eve-map"
@@ -246,7 +286,25 @@ installer_copy_distribution_files() {
 installer_generate_env() {
     local target="$EVE_MAP_HOME/.env.production"
     local temporary="$EVE_MAP_HOME/.env.production.new"
-    [[ ! -e "$target" ]] || eve_map_die "refusing to overwrite existing .env.production"
+    if [[ -e "$target" ]]; then
+        (( INSTALLER_RESUME )) || eve_map_die "refusing to overwrite existing .env.production"
+        [[ -f "$target" && ! -L "$target" ]] || eve_map_die "resume found an unsafe .env.production"
+        [[ "$(stat -c '%U:%G:%a' "$target")" == "root:eve-map:640" ]] ||
+            eve_map_die "resume found incorrect .env.production ownership or permissions"
+        [[ "$(eve_map_read_env SHARED_MAP_DOMAIN "$target")" == "$SHARED_MAP_DOMAIN" ]] ||
+            eve_map_die "resume domain differs from the protected environment"
+        [[ "$(eve_map_read_env SHARED_MAP_WEB_DOMAIN "$target")" == "$SHARED_MAP_WEB_DOMAIN" ]] ||
+            eve_map_die "resume Web domain differs from the protected environment"
+        [[ "$(eve_map_read_env SHARED_MAP_ALLOWED_ORIGINS "$target")" == "https://$SHARED_MAP_WEB_DOMAIN" ]] ||
+            eve_map_die "resume CORS origin differs from the protected Web domain"
+        [[ "$(eve_map_read_env SHARED_MAP_SERVER_IMAGE "$target")" == "$RELEASE_SERVER_IMAGE" ]] ||
+            eve_map_die "resume Server image differs from the recorded release"
+        [[ "$(eve_map_read_env SHARED_MAP_OPS_IMAGE "$target")" == "$RELEASE_OPS_IMAGE" ]] ||
+            eve_map_die "resume Ops image differs from the recorded release"
+        [[ "$(eve_map_read_env SHARED_MAP_EXPECTED_FLYWAY_VERSION "$target")" == "$RELEASE_FLYWAY_VERSION" ]] ||
+            eve_map_die "resume Flyway version differs from the recorded release"
+        return
+    fi
     umask 077
     cat >"$temporary" <<EOF
 SHARED_MAP_DOMAIN=$SHARED_MAP_DOMAIN
@@ -287,6 +345,27 @@ EOF
 }
 
 installer_generate_secrets() {
+    local expected_count spec file expected_uid expected_gid expected_mode expected_identity actual_identity
+    expected_count="$(find "$EVE_MAP_HOME/secrets" -maxdepth 1 -type f -name '*.txt' | wc -l)"
+    if (( INSTALLER_RESUME )) && [[ "$expected_count" == "6" ]]; then
+        for spec in \
+            postgres-database-user.txt:70:70:400 \
+            postgres-database-password.txt:70:70:400 \
+            backup-passphrase.txt:70:70:400 \
+            server-database-user.txt:10001:10001:400 \
+            server-database-password.txt:10001:10001:400 \
+            token-pepper.txt:10001:10001:400; do
+            IFS=: read -r file expected_uid expected_gid expected_mode <<<"$spec"
+            expected_identity="$expected_uid:$expected_gid:$expected_mode"
+            [[ -f "$EVE_MAP_HOME/secrets/$file" && -s "$EVE_MAP_HOME/secrets/$file" && ! -L "$EVE_MAP_HOME/secrets/$file" ]] ||
+                eve_map_die "resume found a missing, empty, or unsafe secret file: $file"
+            actual_identity="$(stat -c '%u:%g:%a' "$EVE_MAP_HOME/secrets/$file")"
+            [[ "$actual_identity" == "$expected_identity" ]] ||
+                eve_map_die "resume found incorrect secret ownership or permissions: $file"
+        done
+        return
+    fi
+    [[ "$expected_count" == "0" ]] || eve_map_die "incomplete secret set detected; do not delete it without operator review"
     SHARED_MAP_OPERATOR_GROUP=eve-map "$EVE_MAP_HOME/ops/generate-secrets.sh" "$EVE_MAP_HOME/secrets" >/dev/null
 }
 
@@ -329,6 +408,7 @@ EOF
     chown root:eve-map "$temporary"
     chmod 0640 "$temporary"
     mv -- "$temporary" "$EVE_MAP_HOME/.installer-state"
+    rm -f -- "$EVE_MAP_HOME/.installer-in-progress"
 }
 
 installer_cleanup() {
@@ -347,8 +427,10 @@ installer_main() {
     installer_ensure_base_tools
     installer_check_internet
     installer_install_docker
-    installer_check_docker_deployment
-    installer_check_ports
+    if (( ! INSTALLER_RESUME )); then
+        installer_check_docker_deployment
+        installer_check_ports
+    fi
     installer_fetch_release
     installer_collect_answers
     installer_dns_guide
@@ -359,15 +441,15 @@ installer_main() {
     eve_map_stage_web_artifact "$RELEASE_WEB_ARTIFACT_FILE" "$RELEASE_WEB_SHA256" "$RELEASE_WEB_VERSION"
     eve_map_switch_web_release "$STAGED_WEB_RELEASE"
     installer_deploy
-    installer_bootstrap_admin
     installer_install_backup_timer
+    installer_bootstrap_admin
+    printf '\nFirst Admin Invite — SAVE THIS INVITE NOW; it cannot be shown again:\n%s\n' "$FIRST_ADMIN_INVITE"
     installer_write_state
 
     printf '\nInstallation completed.\n\n'
     printf 'Web Map:\nhttps://%s\n\n' "$SHARED_MAP_WEB_DOMAIN"
     printf 'Shared Marker:\nhttps://%s\n\n' "$SHARED_MAP_DOMAIN"
     printf 'Workspace:\n%s\n\n' "$EVE_MAP_WORKSPACE_NAME"
-    printf 'First Admin Invite — SAVE THIS INVITE NOW; it cannot be shown again:\n%s\n\n' "$FIRST_ADMIN_INVITE"
     printf 'Useful commands:\n'
     printf '  sudo eve-map status\n'
     printf '  sudo eve-map update\n'
