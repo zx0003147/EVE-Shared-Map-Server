@@ -1,6 +1,7 @@
 package dev.evesharedmap.server.http
 
 import dev.evesharedmap.server.api.sharedMapRoutes
+import dev.evesharedmap.server.config.AllowedWebOrigin
 import dev.evesharedmap.server.health.ReadinessProbe
 import dev.evesharedmap.server.health.healthRoutes
 import dev.evesharedmap.server.logging.installStructuredAccessLogging
@@ -14,6 +15,7 @@ import dev.evesharedmap.server.service.SharedMapService
 import dev.evesharedmap.server.universe.SolarSystemAllowlist
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.HttpMethod
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
@@ -24,6 +26,7 @@ import io.ktor.server.plugins.PayloadTooLargeException
 import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.origin
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respond
@@ -54,10 +57,30 @@ fun Application.configureHttp(
     sharedMarkerService: SharedMarkerService? = null,
     universeBuild: String = SolarSystemAllowlist.load().universeBuild,
     rateLimiter: RateLimiter = InMemoryTokenBucketRateLimiter(clock),
+    allowedOrigins: Set<AllowedWebOrigin> = emptySet(),
     additionalRoutes: Routing.() -> Unit = {},
 ) {
     installRequestIdPlugin()
     installStructuredAccessLogging()
+
+    if (allowedOrigins.isNotEmpty()) {
+        install(CORS) {
+            allowedOrigins.forEach { origin -> allowHost(origin.hostAndPort, schemes = listOf(origin.scheme)) }
+            allowMethod(HttpMethod.Options)
+            allowMethod(HttpMethod.Post)
+            allowMethod(HttpMethod.Patch)
+            allowMethod(HttpMethod.Delete)
+            allowHeader(HttpHeaders.Authorization)
+            allowHeader(HttpHeaders.ContentType)
+            allowHeader(REQUEST_ID_HEADER)
+            allowHeader(IDEMPOTENCY_KEY_HEADER)
+            exposeHeader(REQUEST_ID_HEADER)
+            exposeHeader(HttpHeaders.Location)
+            exposeHeader(HttpHeaders.RetryAfter)
+            allowNonSimpleContentTypes = true
+            allowCredentials = false
+        }
+    }
 
     install(ContentNegotiation) {
         json(
@@ -150,6 +173,8 @@ fun Application.configureHttp(
         additionalRoutes()
     }
 }
+
+private const val IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 
 private suspend fun io.ktor.server.application.ApplicationCall.respondSafeError(
     status: HttpStatusCode,

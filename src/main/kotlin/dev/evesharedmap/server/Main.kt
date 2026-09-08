@@ -103,6 +103,7 @@ private fun runServer() {
                     sharedMapService = service,
                     sharedMarkerService = markerService,
                     universeBuild = markerService.universeBuild,
+                    allowedOrigins = config.allowedOrigins,
                 )
             }
 

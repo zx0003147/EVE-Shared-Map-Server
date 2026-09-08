@@ -4,6 +4,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.InvalidPathException
 import java.nio.file.Path
+import java.net.URI
+import java.util.Locale
 
 data class ServerConfig(
     val bindHost: String,
@@ -12,6 +14,7 @@ data class ServerConfig(
     val environment: String,
     val logLevel: LogLevel,
     val tokenPepper: SecretValue,
+    val allowedOrigins: Set<AllowedWebOrigin>,
 ) {
     companion object {
         private const val DEFAULT_BIND_HOST = "0.0.0.0"
@@ -31,6 +34,7 @@ data class ServerConfig(
             if (port !in 1..65535) {
                 throw ConfigurationException("SHARED_MAP_PORT must be an integer from 1 through 65535.")
             }
+            val allowedOrigins = parseAllowedOrigins(environment.valueOrNull("SHARED_MAP_ALLOWED_ORIGINS"))
 
             val databaseUrl = environment.required("SHARED_MAP_DATABASE_URL")
             if (!databaseUrl.startsWith("jdbc:postgresql://")) {
@@ -62,7 +66,52 @@ data class ServerConfig(
                 environment = environment.valueOrNull("SHARED_MAP_ENVIRONMENT") ?: DEFAULT_ENVIRONMENT,
                 logLevel = LogLevel.parse(environment.valueOrNull("SHARED_MAP_LOG_LEVEL")),
                 tokenPepper = tokenPepper,
+                allowedOrigins = allowedOrigins,
             )
+        }
+
+        private fun parseAllowedOrigins(raw: String?): Set<AllowedWebOrigin> {
+            if (raw == null) return emptySet()
+            return raw.split(',').map { value ->
+                val trimmed = value.trim()
+                if (trimmed.isEmpty()) throw ConfigurationException(
+                    "SHARED_MAP_ALLOWED_ORIGINS must contain comma-separated HTTP(S) origins.",
+                )
+                val uri = try {
+                    URI(trimmed)
+                } catch (_: Exception) {
+                    throw ConfigurationException(
+                        "SHARED_MAP_ALLOWED_ORIGINS must contain comma-separated HTTP(S) origins.",
+                    )
+                }
+                if (!uri.isAbsolute || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null ||
+                    !(uri.rawPath.isNullOrEmpty() || uri.rawPath == "/")
+                ) {
+                    throw ConfigurationException(
+                        "SHARED_MAP_ALLOWED_ORIGINS must contain origins without paths, credentials, queries, or fragments.",
+                    )
+                }
+                val scheme = uri.scheme?.lowercase(Locale.ROOT)
+                val host = uri.host?.lowercase(Locale.ROOT)
+                if (scheme !in setOf("https", "http") || host == null) throw ConfigurationException(
+                    "SHARED_MAP_ALLOWED_ORIGINS must contain comma-separated HTTP(S) origins.",
+                )
+                val canonicalScheme = checkNotNull(scheme)
+                if (canonicalScheme == "http" && host !in setOf("localhost", "127.0.0.1")) throw ConfigurationException(
+                    "Plain HTTP Web origins are allowed only for localhost development.",
+                )
+                val port = uri.port
+                if (port != -1 && port !in 1..65_535) throw ConfigurationException(
+                    "SHARED_MAP_ALLOWED_ORIGINS contains an invalid port.",
+                )
+                val canonicalPort = when {
+                    port == -1 -> ""
+                    canonicalScheme == "https" && port == 443 -> ""
+                    canonicalScheme == "http" && port == 80 -> ""
+                    else -> ":$port"
+                }
+                AllowedWebOrigin(canonicalScheme, "$host$canonicalPort")
+            }.toSet()
         }
 
         private fun readDatabaseUser(environment: Map<String, String>): String {
@@ -129,6 +178,13 @@ data class ServerConfig(
             }
         }
     }
+}
+
+data class AllowedWebOrigin(
+    val scheme: String,
+    val hostAndPort: String,
+) {
+    val origin: String get() = "$scheme://$hostAndPort"
 }
 
 data class DatabaseConfig(

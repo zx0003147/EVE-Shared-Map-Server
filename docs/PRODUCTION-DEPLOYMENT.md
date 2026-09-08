@@ -137,6 +137,11 @@ the secrets. Never commit these files, bake them into an image, put their values
 print them in logs. Copy `.env.production.example` to `.env.production`, set the real domain, image references,
 consumer-specific paths, and resource limits, then protect it with mode 0600.
 
+Set `SHARED_MAP_ALLOWED_ORIGINS` to the exact HTTPS origin serving EVE Static Map Planner Web, not the API origin
+unless they are the same. Multiple approved Web deployments are comma-separated. Do not use a wildcard, path, or
+plain HTTP remote origin. Recreate the server after changing the allowlist. This setting controls browser CORS only;
+Desktop requests do not carry `Origin` and remain valid.
+
 The duplicate database files must remain byte-identical and are rotated together. The token pepper is persistent cryptographic state. Losing it makes all existing device tokens and unconsumed
 invites unverifiable even if PostgreSQL is restored. Changing it immediately invalidates those credentials; V1 has
 no lossless multi-key pepper rotation. A database password may be rotated only as a coordinated PostgreSQL and secret
@@ -173,6 +178,24 @@ the server, and Caddy, waits for health, verifies Flyway schema 3, and checks th
 
 Flyway runs before the application listens. A migration failure prevents application health and must not be hidden.
 The compose file never publishes PostgreSQL or port 8080 and never removes the persistent PostgreSQL volume.
+
+Verify the configured Web origin before issuing production invites:
+
+```sh
+curl -fsS -D - -o /dev/null \
+  -H 'Origin: https://map.example.com' \
+  https://marker.example.com/api/v1/meta
+
+curl -fsS -D - -o /dev/null -X OPTIONS \
+  -H 'Origin: https://map.example.com' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: authorization,content-type,x-request-id,idempotency-key' \
+  https://marker.example.com/api/v1/workspaces/00000000-0000-0000-0000-000000000000/markers
+```
+
+The first response must include the exact `Access-Control-Allow-Origin`; the preflight must succeed without
+`Access-Control-Allow-Credentials`. Repeat with an unapproved origin and confirm `403`. Both the Web site and API
+must use HTTPS; do not weaken browser security or rely on mixed content.
 
 ## Bootstrap the first Admin
 

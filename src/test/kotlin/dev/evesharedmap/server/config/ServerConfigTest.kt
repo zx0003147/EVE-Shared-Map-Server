@@ -24,6 +24,7 @@ class ServerConfigTest {
                 "SHARED_MAP_ENVIRONMENT" to "test",
                 "SHARED_MAP_LOG_LEVEL" to "warn",
                 "SHARED_MAP_TOKEN_PEPPER_FILE" to pepperFile.toString(),
+                "SHARED_MAP_ALLOWED_ORIGINS" to "https://web.example.com:443, http://localhost:8081",
             ),
         )
 
@@ -35,8 +36,28 @@ class ServerConfigTest {
         assertEquals("test", config.environment)
         assertEquals(LogLevel.WARN, config.logLevel)
         assertEquals("<redacted>", config.tokenPepper.toString())
+        assertEquals(
+            setOf("https://web.example.com", "http://localhost:8081"),
+            config.allowedOrigins.mapTo(linkedSetOf(), AllowedWebOrigin::origin),
+        )
         config.database.password.close()
         config.tokenPepper.close()
+    }
+
+    @Test
+    fun `allowed Web origins reject wildcard paths credentials and remote HTTP`() {
+        val passwordFile = writeSecret("local-test-password")
+        listOf(
+            "*",
+            "https://web.example.com/path",
+            "https://user@web.example.com",
+            "http://web.example.com",
+            "https://web.example.com,",
+        ).forEach { value ->
+            assertFailsWith<ConfigurationException>(value) {
+                ServerConfig.load(validEnvironment(passwordFile) + ("SHARED_MAP_ALLOWED_ORIGINS" to value))
+            }
+        }
     }
 
     @Test

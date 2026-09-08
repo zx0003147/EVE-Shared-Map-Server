@@ -40,8 +40,21 @@ Runtime configuration:
 | `SHARED_MAP_TOKEN_PEPPER_FILE` | required | Readable non-empty HMAC pepper secret file |
 | `SHARED_MAP_ENVIRONMENT` | `development` | Environment label |
 | `SHARED_MAP_LOG_LEVEL` | `INFO` | TRACE, DEBUG, INFO, WARN, or ERROR |
+| `SHARED_MAP_ALLOWED_ORIGINS` | empty | Comma-separated exact Web client origins; remote origins must use HTTPS |
 
 Secrets are not accepted as ordinary environment values, command-line arguments, or Gradle properties.
+
+`SHARED_MAP_ALLOWED_ORIGINS` enables browser CORS without changing Desktop behavior. Use origins only, with no path,
+query, fragment, credentials, or wildcard. Plain HTTP is accepted only for `localhost` and `127.0.0.1` development;
+production examples must use exact HTTPS origins:
+
+```text
+SHARED_MAP_ALLOWED_ORIGINS=https://map.example.com,https://map-backup.example.com
+```
+
+The server allows `OPTIONS`, the Protocol v1 REST mutation methods, and only the headers required by existing
+clients. It does not enable credentialed cookies. A disallowed browser origin receives `403`; a Desktop request
+without `Origin` is unchanged.
 
 ## Start PostgreSQL
 
@@ -206,3 +219,8 @@ commands, permissions, health checks, rollback procedure, and restore drill are 
 In EVE Static Map Planner 1.2.0, enter the instance origin, for example `https://map.example.com`, under Shared Map
 preferences and exchange a Workspace invite. `/api/v1` is appended by the client. No particular hosted domain is
 required: operators may use any correctly configured HTTPS origin.
+
+For the Phase 3 Web client, also set `SHARED_MAP_ALLOWED_ORIGINS` to the exact HTTPS origin that serves the Web map,
+then recreate the server container. Web and API must both be HTTPS in production; browsers will block an HTTPS Web
+page from calling a remote HTTP API. Ktor remains behind the existing Caddy TLS reverse proxy. The current protocol
+uses 30-second REST polling and has no WebSocket or SSE endpoint.

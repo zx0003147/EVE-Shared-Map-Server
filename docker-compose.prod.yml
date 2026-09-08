@@ -49,6 +49,7 @@ services:
       SHARED_MAP_TOKEN_PEPPER_FILE: /run/secrets/token_pepper
       SHARED_MAP_ENVIRONMENT: production
       SHARED_MAP_LOG_LEVEL: ${SHARED_MAP_LOG_LEVEL:-INFO}
+      SHARED_MAP_ALLOWED_ORIGINS: ${SHARED_MAP_ALLOWED_ORIGINS:?Set exact HTTPS Web client origins}
     secrets:
       - source: server_db_username
         target: db_username

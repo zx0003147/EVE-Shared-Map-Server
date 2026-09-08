@@ -34,6 +34,7 @@ services:
       SHARED_MAP_TOKEN_PEPPER_FILE: /run/secrets/token_pepper
       SHARED_MAP_ENVIRONMENT: development
       SHARED_MAP_LOG_LEVEL: INFO
+      SHARED_MAP_ALLOWED_ORIGINS: ${SHARED_MAP_ALLOWED_ORIGINS:-http://localhost:8765,http://127.0.0.1:8765}
     secrets:
       - db_password
       - token_pepper
