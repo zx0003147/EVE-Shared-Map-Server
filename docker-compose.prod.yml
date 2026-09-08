@@ -179,7 +179,7 @@ services:
       SHARED_MAP_DATABASE_USER_FILE: /run/secrets/db_username
       SHARED_MAP_DATABASE_PASSWORD_FILE: /run/secrets/db_password
       SHARED_MAP_BACKUP_ENCRYPTION_PASSPHRASE_FILE: /run/secrets/backup_passphrase
-      SHARED_MAP_EXPECTED_FLYWAY_VERSION: ${SHARED_MAP_EXPECTED_FLYWAY_VERSION:-3}
+      SHARED_MAP_EXPECTED_FLYWAY_VERSION: ${SHARED_MAP_EXPECTED_FLYWAY_VERSION:-4}
       SHARED_MAP_ENVIRONMENT: ${SHARED_MAP_RESTORE_ENVIRONMENT:-validation}
     secrets:
       - source: postgres_db_username

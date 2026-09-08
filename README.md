@@ -1,8 +1,9 @@
 # EVE Shared Map Server
 
 EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. Version 0.2.0 provides the identity,
-Workspace, membership, invite, device-token, authentication, authorization, audit, idempotency, and complete Shared
-Marker server API. The Map desktop repository is not a dependency of this server and remains usable without it.
+Workspace, membership, invite, device-token, authentication, authorization, audit, idempotency, complete Shared
+Marker API, and the optional bounded Route Handoff feature. The Map desktop repository is not a dependency of this
+server and remains usable without it.
 
 ## Quick Install (self-hosted)
 
@@ -166,8 +167,8 @@ response replay.
 
 ## Workspace roles
 
-- `VIEWER`: authenticate and read self/Workspace data.
-- `EDITOR`: Viewer capabilities plus Shared Marker create, update, and delete.
+- `VIEWER`: authenticate and read self/Workspace data, Shared Markers, and Route Handoffs.
+- `EDITOR`: Viewer capabilities plus Shared Marker create/update/delete and Route Handoff publish.
 - `ADMIN`: Editor capabilities plus member, invite, role, membership, and device administration.
 
 The final active Admin cannot be downgraded or removed.
@@ -185,6 +186,7 @@ The final active Admin cannot be downgraded or removed.
 - `GET|POST /api/v1/workspaces/{workspaceId}/markers`
 - `PATCH /api/v1/workspaces/{workspaceId}/markers/{markerId}`
 - `DELETE /api/v1/workspaces/{workspaceId}/markers/{markerId}?expectedVersion={version}`
+- `GET|POST /api/v1/workspaces/{workspaceId}/route-handoffs`
 - `GET|POST /api/v1/workspaces/{workspaceId}/members`
 - `PATCH|DELETE /api/v1/workspaces/{workspaceId}/members/{memberId}`
 - `GET /api/v1/workspaces/{workspaceId}/members/{memberId}/devices`
@@ -194,8 +196,14 @@ The final active Admin cannot be downgraded or removed.
 - `DELETE /api/v1/workspaces/{workspaceId}/invites/{inviteId}`
 
 All authenticated mutations require a canonical UUID `Idempotency-Key`, except invite exchange. Marker create,
-update, and delete use ordinary replayable 24-hour idempotency; update/delete also require optimistic-lock versions.
-`/api/v1/meta` advertises `shared-markers` and the packaged universe build.
+update/delete and Route Handoff publish use ordinary replayable 24-hour idempotency; marker update/delete also
+require optimistic-lock versions. `/api/v1/meta` keeps protocol major 1 and advertises `route-handoffs` separately
+from `shared-markers` plus the packaged universe build. Older clients and older Servers remain feature-compatible.
+
+Route Handoffs are independent Workspace rows, not Shared Marker rows and not Web Pack data. A publish stores route
+intent and its resolved snapshot, validates systems/path/edge vocabulary/range, writes only safe audit metadata,
+expires after seven days, and trims each Workspace to its newest 20 records. Viewer may read; Editor/Admin may
+publish. No Device Token, local database, Personal Ansiblex, or unrelated Desktop state is accepted.
 
 ## Solar-system allowlist
 
@@ -222,9 +230,10 @@ Generation provenance, hashes, the deterministic update command, and verificatio
 .\gradlew.bat --no-daemon --console=plain clean build
 ```
 
-The suite includes unit, Ktor HTTP, real PostgreSQL 18.6 Testcontainers, V1→V2→V3 migration upgrade, Marker
-concurrency, optimistic locking, authorization, allowlist, security, secret-storage, and end-to-end Marker lifecycle
-tests. Release acceptance requires Docker and must have zero skipped PostgreSQL tests.
+The suite includes unit, Ktor HTTP, real PostgreSQL 18.6 Testcontainers, V1→V2→V3→V4 migration upgrade, Marker
+concurrency, optimistic locking, Route Handoff authorization/isolation/validation/idempotency/expiry/bounds/audit,
+allowlist, security, secret-storage, and end-to-end Marker lifecycle tests. Release acceptance requires Docker and
+must have zero skipped PostgreSQL tests.
 
 ## Docker workflow
 
@@ -242,12 +251,14 @@ tmpfs. PostgreSQL state remains in the named dev volume unless the operator expl
 
 Flyway runs synchronously before Ktor becomes ready. `V1__skeleton.sql` is the Phase 1 baseline;
 `V2__workspace_authentication.sql` creates only Phase 2 identity/auth tables, and
-`V3__shared_markers.sql` adds the frozen Shared Marker table, constraints, and indexes. Flyway clean and automatic
+`V3__shared_markers.sql` adds the frozen Shared Marker table, constraints, and indexes. `V4__route_handoffs.sql`
+adds the bounded, expiring Workspace Route Handoff resource. Flyway clean and automatic
 repair remain disabled.
 
 Audit events are append-only and contain event-time actor identity plus safe metadata. Marker rows are hard deleted,
-while `MARKER_CREATED`, `MARKER_UPDATED`, and `MARKER_DELETED` audit events remain. Audit never contains complete
-marker notes, bearer tokens, invite secrets, hashes, Authorization headers, database passwords, or request bodies.
+while `MARKER_CREATED`, `MARKER_UPDATED`, and `MARKER_DELETED` audit events remain. `ROUTE_HANDOFF_PUBLISHED` stores
+only request ID, route type, origin/destination, and resolved-system count. Audit never contains complete marker notes,
+route bodies, bearer tokens, invite secrets, hashes, Authorization headers, database passwords, or request bodies.
 
 Logs are JSON Lines on stdout. Access logs contain bounded request ID, method, route template, status, and duration;
 they omit query strings, headers, cookies, and request/response bodies.

@@ -103,7 +103,7 @@ test_env_generation() {
     SHARED_MAP_ACME_EMAIL=admin@example.test
     RELEASE_SERVER_IMAGE=registry.example.test/server:0.1.0
     RELEASE_OPS_IMAGE=registry.example.test/ops:0.1.0
-    RELEASE_FLYWAY_VERSION=3
+    RELEASE_FLYWAY_VERSION=4
     PATH="$mock_bin:$PATH" installer_generate_env
     grep -Fxq 'SHARED_MAP_ALLOWED_ORIGINS=https://map.example.test' "$EVE_MAP_HOME/.env.production" || return 1
     grep -Fxq "SHARED_MAP_TOKEN_PEPPER_FILE=$EVE_MAP_HOME/secrets/token-pepper.txt" "$EVE_MAP_HOME/.env.production" || return 1
@@ -145,7 +145,7 @@ EOF
     SHARED_MAP_WEB_DOMAIN=map.example.test
     RELEASE_SERVER_IMAGE=ghcr.io/example/server:0.1.0
     RELEASE_OPS_IMAGE=ghcr.io/example/ops:0.1.0
-    RELEASE_FLYWAY_VERSION=3
+    RELEASE_FLYWAY_VERSION=4
     cat >"$EVE_MAP_HOME/.env.production" <<EOF
 SHARED_MAP_DOMAIN=$SHARED_MAP_DOMAIN
 SHARED_MAP_WEB_DOMAIN=$SHARED_MAP_WEB_DOMAIN
@@ -197,14 +197,14 @@ test_valid_release_manifest() {
   "webSha256": "$WEB_ARTIFACT_SHA",
   "serverImage": "ghcr.io/example/eve-map-server:0.1.0",
   "opsImage": "ghcr.io/example/eve-map-ops:0.1.0",
-  "flywayVersion": 3,
+  "flywayVersion": 4,
   "minimumInstallerVersion": 1
 }
 EOF
     eve_map_release_manifest_load "$manifest" || return 1
     [[ "$RELEASE_SELF_HOSTED_VERSION" == "0.1.0" ]] || return 1
     [[ "$RELEASE_WEB_VERSION" == "1.7.0" ]] || return 1
-    [[ "$RELEASE_FLYWAY_VERSION" == "3" ]] || return 1
+    [[ "$RELEASE_FLYWAY_VERSION" == "4" ]] || return 1
     [[ "$RELEASE_SERVER_IMAGE" == "ghcr.io/example/eve-map-server:0.1.0" ]]
 }
 

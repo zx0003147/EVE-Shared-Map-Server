@@ -4,6 +4,9 @@ import com.zaxxer.hikari.HikariDataSource
 import dev.evesharedmap.server.api.CreateSharedMarkerRequest
 import dev.evesharedmap.server.api.PROTOCOL_JSON
 import dev.evesharedmap.server.api.UpdateSharedMarkerRequest
+import dev.evesharedmap.server.api.PublishRouteHandoffRequest
+import dev.evesharedmap.server.api.RouteHandoffMapMetadataDto
+import dev.evesharedmap.server.api.RouteHandoffResolvedEdgeDto
 import dev.evesharedmap.server.config.DatabaseConfig
 import dev.evesharedmap.server.config.SecretValue
 import dev.evesharedmap.server.database.DatabaseFactory
@@ -15,6 +18,8 @@ import dev.evesharedmap.server.health.ReadinessProbe
 import dev.evesharedmap.server.http.configureHttp
 import dev.evesharedmap.server.marker.SharedMarkerService
 import dev.evesharedmap.server.marker.SharedMarkerValidation
+import dev.evesharedmap.server.route.RouteHandoffService
+import dev.evesharedmap.server.route.RouteHandoffValidation
 import dev.evesharedmap.server.security.CredentialHasher
 import dev.evesharedmap.server.security.InMemoryTokenBucketRateLimiter
 import dev.evesharedmap.server.security.SecureCredentialGenerator
@@ -70,7 +75,7 @@ class Phase3PostgreSqlIntegrationTest {
     lateinit var tempDirectory: Path
 
     @Test
-    fun `V1 to V2 to V3 upgrade preserves Phase 2 authentication and repeats cleanly`() {
+    fun `V1 to V2 to V3 to V4 upgrade preserves Phase 2 authentication and repeats cleanly`() {
         newBundle(migrate = false).use { bundle ->
             val phase2Directory = tempDirectory.resolve("phase2-migrations")
             Files.createDirectories(phase2Directory)
@@ -93,11 +98,12 @@ class Phase3PostgreSqlIntegrationTest {
             val upgrade = FlywayMigrator(bundle.dataSource, schemas = arrayOf(bundle.schema)).migrateAndValidate()
             val repeat = FlywayMigrator(bundle.dataSource, schemas = arrayOf(bundle.schema)).migrateAndValidate()
 
-            assertEquals(1, upgrade.migrationsExecuted)
-            assertEquals("3", upgrade.currentVersion)
+            assertEquals(2, upgrade.migrationsExecuted)
+            assertEquals("4", upgrade.currentVersion)
             assertEquals(0, repeat.migrationsExecuted)
-            assertEquals("3", repeat.currentVersion)
+            assertEquals("4", repeat.currentVersion)
             assertTrue("shared_markers" in bundle.businessTables())
+            assertTrue("route_handoffs" in bundle.businessTables())
             assertEquals(1L, bundle.count("workspaces"))
             assertEquals(
                 bootstrap.memberId,
@@ -379,6 +385,79 @@ class Phase3PostgreSqlIntegrationTest {
             )
             assertFalse(auditText.contains("Form before"))
             assertFalse(auditText.contains("Moved staging"))
+        } finally {
+            bundle.close()
+        }
+    }
+
+    @Test
+    fun `HTTP Route Handoff enforces workspace roles idempotency bounded history expiry and audit`() = testApplication {
+        val bundle = newBundle()
+        try {
+            val admin = bundle.bootstrapAdminIssued()
+            val editor = bundle.createMemberDevice(admin.principal, WorkspaceRole.EDITOR, "Route Editor")
+            val viewer = bundle.createMemberDevice(admin.principal, WorkspaceRole.VIEWER, "Route Viewer")
+            val other = bundle.seedIndependentWorkspace("Other Workspace", WorkspaceRole.ADMIN)
+            val workspaceId = admin.principal.membership.workspaceId
+            application {
+                configureHttp(
+                    ReadinessProbe { true },
+                    "test",
+                    sharedMapService = bundle.service,
+                    sharedMarkerService = bundle.markerService,
+                    routeHandoffService = bundle.routeHandoffService,
+                    universeBuild = bundle.allowlist.universeBuild,
+                    rateLimiter = InMemoryTokenBucketRateLimiter(),
+                )
+            }
+
+            val path = "/api/v1/workspaces/$workspaceId/route-handoffs"
+            assertEquals(HttpStatusCode.Unauthorized, client.get(path).status)
+            val viewerPublish = client.post(path) {
+                bearer(viewer.rawSecret); idempotency(); jsonBody(routeBody())
+            }
+            assertEquals(HttpStatusCode.Forbidden, viewerPublish.status)
+
+            val key = UUID.randomUUID().toString()
+            val created = client.post(path) {
+                bearer(editor.rawSecret); header("Idempotency-Key", key); jsonBody(routeBody())
+            }
+            val replay = client.post(path) {
+                bearer(editor.rawSecret); header("Idempotency-Key", key); jsonBody(routeBody())
+            }
+            assertEquals(HttpStatusCode.Created, created.status)
+            assertEquals(created.bodyAsText(), replay.bodyAsText())
+            assertEquals("NORMAL", created.json()["type"]!!.jsonPrimitive.content)
+            assertEquals("Route Editor", created.json()["publisher"]!!.jsonObject["displayName"]!!.jsonPrimitive.content)
+            assertEquals(1L, bundle.count("route_handoffs"))
+            assertEquals(1L, bundle.countWhere("audit_events", "action = 'ROUTE_HANDOFF_PUBLISHED'"))
+
+            val read = client.get(path) { bearer(viewer.rawSecret) }
+            assertEquals(HttpStatusCode.OK, read.status)
+            assertEquals(1, read.json()["routeHandoffs"]!!.jsonArray.size)
+            val otherPath = "/api/v1/workspaces/${other.principal.membership.workspaceId}/route-handoffs"
+            assertTrue(client.get(otherPath) { bearer(other.rawSecret) }.json()["routeHandoffs"]!!.jsonArray.isEmpty())
+            assertEquals(HttpStatusCode.NotFound, client.get(path) { bearer(other.rawSecret) }.status)
+
+            val invalid = client.post(path) {
+                bearer(editor.rawSecret); idempotency(); jsonBody(routeBody(destinationSystemId = Int.MAX_VALUE))
+            }
+            assertEquals(HttpStatusCode.UnprocessableEntity, invalid.status)
+
+            repeat(21) {
+                val response = client.post(path) {
+                    bearer(admin.rawSecret); idempotency(); jsonBody(routeBody())
+                }
+                assertEquals(HttpStatusCode.Created, response.status, response.bodyAsText())
+            }
+            assertEquals(20L, bundle.countWhere("route_handoffs", "workspace_id = '$workspaceId'"))
+            bundle.execute(
+                "UPDATE route_handoffs SET created_at = now() - interval '8 days', " +
+                    "expires_at = now() - interval '1 second' WHERE workspace_id = '$workspaceId'",
+            )
+            val expired = client.get(path) { bearer(viewer.rawSecret) }
+            assertTrue(expired.json()["routeHandoffs"]!!.jsonArray.isEmpty())
+            assertEquals(22L, bundle.countWhere("audit_events", "action = 'ROUTE_HANDOFF_PUBLISHED'"))
         } finally {
             bundle.close()
         }
@@ -719,6 +798,7 @@ class Phase3PostgreSqlIntegrationTest {
             allowlist,
             SharedMapService(dataSource, hasher, SecureCredentialGenerator()),
             SharedMarkerService(dataSource, SharedMarkerValidation(allowlist)),
+            RouteHandoffService(dataSource, RouteHandoffValidation(allowlist)),
         )
     }
 
@@ -729,6 +809,7 @@ class Phase3PostgreSqlIntegrationTest {
         val allowlist: SolarSystemAllowlist,
         val service: SharedMapService,
         val markerService: SharedMarkerService,
+        val routeHandoffService: RouteHandoffService,
     ) : AutoCloseable {
         fun bootstrapAdminIssued() = service.bootstrapAdmin("Admin", "Workspace", Duration.ofHours(1)).let { bootstrap ->
             service.exchangeInvite(bootstrap.rawInviteSecret, "Admin Device", "bootstrap-exchange")
@@ -945,6 +1026,22 @@ class Phase3PostgreSqlIntegrationTest {
         tags: List<String>,
         notes: String?,
     ): String = PROTOCOL_JSON.encodeToString(UpdateSharedMarkerRequest(expectedVersion, name, color, tags, notes))
+
+    private fun routeBody(destinationSystemId: Int = 30004759): String = PROTOCOL_JSON.encodeToString(
+        PublishRouteHandoffRequest(
+            type = "NORMAL",
+            originSystemId = 30000142,
+            waypointSystemIds = listOf(30002537),
+            destinationSystemId = destinationSystemId,
+            useAnsiblex = true,
+            resolvedSystemIds = listOf(30000142, 30002537, destinationSystemId),
+            resolvedEdges = listOf(
+                RouteHandoffResolvedEdgeDto(30000142, 30002537, "ANSIBLEX"),
+                RouteHandoffResolvedEdgeDto(30002537, destinationSystemId, "STARGATE"),
+            ),
+            mapMetadata = RouteHandoffMapMetadataDto("sde-3466501", "1.8.0", "pack-1"),
+        ),
+    )
 
     private fun io.ktor.client.request.HttpRequestBuilder.bearer(token: String) {
         header(HttpHeaders.Authorization, "Bearer $token")

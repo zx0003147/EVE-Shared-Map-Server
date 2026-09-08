@@ -198,7 +198,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml --profile o
 ```
 
 `ops/deploy.sh` rejects HTTP smoke URLs and untagged/`latest` images, pulls the exact references, starts PostgreSQL,
-the server, and Caddy, waits for health, verifies Flyway schema 3, and checks the public health and meta endpoints:
+the server, and Caddy, waits for health, verifies Flyway schema 4, and checks the public health and meta endpoints:
 
 ```sh
 ./ops/deploy.sh /opt/eve-shared-map/.env.production \
@@ -287,9 +287,10 @@ docker compose --env-file .env.production -f docker-compose.prod.yml --profile o
 ```
 
 The script verifies SHA-256, decrypts to tmpfs, validates the custom dump, resets only the exact confirmed target,
-restores with stop-on-error, and verifies the expected Flyway version plus marker/audit tables. Start an isolated
-server against that restored database, use a retained test credential to authenticate, fetch markers, and confirm
-audit rows. Never point the drill at the live database. Perform and record this drill at least quarterly.
+restores with stop-on-error, and verifies expected Flyway schema 4 plus marker, route-handoff, and audit tables. Start
+an isolated server against that restored database, use a retained test credential to authenticate, fetch markers and
+recent Route Handoffs, and confirm audit rows. Never point the drill at the live database. Perform and record this
+drill at least quarterly.
 
 A real production restore additionally requires setting `SHARED_MAP_RESTORE_ENVIRONMENT=production` and passing
 `--allow-production-restore`; exact-name confirmation is still required. Before doing so, stop the application,
@@ -305,7 +306,8 @@ For every upgrade that may migrate the database:
 4. Run compose config validation.
 5. Recreate the application as needed. Do not use `down -v`.
 6. Let Flyway complete before traffic becomes healthy.
-7. Check public HTTPS health/meta and a real authorized marker read/write smoke.
+7. Check public HTTPS health/meta, `route-handoffs` feature advertisement, and real authorized marker plus Route
+   Handoff read/write smokes.
 8. Retain the previous images and the pre-deploy backup.
 
 Application rollback and database rollback are different. If no migration ran, or the old application is proven

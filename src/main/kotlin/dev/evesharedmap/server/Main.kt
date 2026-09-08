@@ -9,6 +9,8 @@ import dev.evesharedmap.server.http.configureHttp
 import dev.evesharedmap.server.logging.logSanitizedError
 import dev.evesharedmap.server.marker.SharedMarkerService
 import dev.evesharedmap.server.marker.SharedMarkerValidation
+import dev.evesharedmap.server.route.RouteHandoffService
+import dev.evesharedmap.server.route.RouteHandoffValidation
 import dev.evesharedmap.server.security.CredentialHasher
 import dev.evesharedmap.server.service.ServiceException
 import dev.evesharedmap.server.service.SharedMapService
@@ -52,7 +54,7 @@ internal fun runBootstrapAdmin(
     }
 
     return try {
-        withApplicationServices(environment) { _, service, _, _ ->
+        withApplicationServices(environment) { _, service, _, _, _ ->
             val result = service.bootstrapAdmin(options.displayName, options.workspaceName, options.inviteLifetime)
             out.println("Bootstrap completed.")
             out.println("userId=${result.userId}")
@@ -82,7 +84,7 @@ private fun runServer() {
 
     try {
         logger.info("event=startup stage=configuration")
-        withApplicationServices(System.getenv()) { resources, service, markerService, migration ->
+        withApplicationServices(System.getenv()) { resources, service, markerService, routeHandoffService, migration ->
             val config = resources.config
             val dataSource = resources.dataSource
             logger.info("event=startup stage=database_validation")
@@ -102,6 +104,7 @@ private fun runServer() {
                     serverVersion = BuildInfo.serverVersion,
                     sharedMapService = service,
                     sharedMarkerService = markerService,
+                    routeHandoffService = routeHandoffService,
                     universeBuild = markerService.universeBuild,
                     allowedOrigins = config.allowedOrigins,
                 )
@@ -130,6 +133,7 @@ private inline fun <T> withApplicationServices(
         ApplicationResources,
         SharedMapService,
         SharedMarkerService,
+        RouteHandoffService,
         dev.evesharedmap.server.database.MigrationSummary,
     ) -> T,
 ): T {
@@ -156,6 +160,7 @@ private inline fun <T> withApplicationServices(
             resources,
             SharedMapService(dataSource, hasher),
             SharedMarkerService(dataSource, SharedMarkerValidation(allowlist)),
+            RouteHandoffService(dataSource, RouteHandoffValidation(allowlist)),
             migration,
         )
     } finally {

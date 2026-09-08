@@ -11,6 +11,7 @@ enum class WorkspaceRole {
     fun permits(capability: WorkspaceCapability): Boolean = when (capability) {
         WorkspaceCapability.READ -> true
         WorkspaceCapability.MARKER_WRITE -> this == EDITOR || this == ADMIN
+        WorkspaceCapability.ROUTE_HANDOFF_WRITE -> this == EDITOR || this == ADMIN
         WorkspaceCapability.ADMIN -> this == ADMIN
     }
 }
@@ -18,6 +19,7 @@ enum class WorkspaceRole {
 enum class WorkspaceCapability {
     READ,
     MARKER_WRITE,
+    ROUTE_HANDOFF_WRITE,
     ADMIN,
 }
 

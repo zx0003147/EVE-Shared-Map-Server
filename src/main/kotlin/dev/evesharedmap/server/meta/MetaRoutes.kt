@@ -30,7 +30,7 @@ fun Route.metaRoutes(
                 protocolVersion = PROTOCOL_VERSION,
                 minimumClientProtocolVersion = PROTOCOL_VERSION,
                 maximumClientProtocolVersion = PROTOCOL_VERSION,
-                features = listOf("shared-markers", "members", "invites", "device-revocation"),
+                features = listOf("shared-markers", "members", "invites", "device-revocation", "route-handoffs"),
                 universeBuild = universeBuild,
             ),
         )

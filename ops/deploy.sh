@@ -88,7 +88,7 @@ wait_healthy caddy
 flyway_version="$(compose exec -T postgres sh -c \
     'psql -U "$(cat /run/secrets/db_username)" -d "$POSTGRES_DB" -Atc "SELECT max(version) FROM flyway_schema_history WHERE success"')"
 expected_flyway_version="$(awk -F= '$1 == "SHARED_MAP_EXPECTED_FLYWAY_VERSION" { print $2 }' "$env_file" | tail -n 1 | tr -d '\r')"
-expected_flyway_version="${expected_flyway_version:-3}"
+expected_flyway_version="${expected_flyway_version:-4}"
 case "$expected_flyway_version" in
     ''|*[!0-9]*) echo "deploy failed: SHARED_MAP_EXPECTED_FLYWAY_VERSION must be numeric" >&2; exit 2 ;;
 esac

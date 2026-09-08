@@ -7,6 +7,11 @@ import dev.evesharedmap.server.domain.MemberRecord
 import dev.evesharedmap.server.domain.WorkspaceMembership
 import dev.evesharedmap.server.marker.SharedMarker
 import dev.evesharedmap.server.marker.SharedMarkerSnapshot
+import dev.evesharedmap.server.route.RouteHandoff
+import dev.evesharedmap.server.route.RouteHandoffDraft
+import dev.evesharedmap.server.route.RouteHandoffMapMetadata
+import dev.evesharedmap.server.route.RouteHandoffResolvedEdge
+import dev.evesharedmap.server.route.RouteHandoffType
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -49,6 +54,69 @@ data class UpdateSharedMarkerRequest(
     val color: String,
     val tags: List<String>,
     val notes: String?,
+)
+
+@Serializable
+data class RouteHandoffMapMetadataDto(
+    val universeBuild: String,
+    val plannerVersion: String,
+    val webPackVersion: String? = null,
+)
+
+@Serializable
+data class RouteHandoffResolvedEdgeDto(
+    val fromSystemId: Int,
+    val toSystemId: Int,
+    val type: String,
+    val distanceLy: Double? = null,
+)
+
+@Serializable
+data class PublishRouteHandoffRequest(
+    val type: String,
+    val originSystemId: Int,
+    val waypointSystemIds: List<Int> = emptyList(),
+    val destinationSystemId: Int,
+    val useAnsiblex: Boolean? = null,
+    val capitalRangeLy: Double? = null,
+    val jumpProfileId: String? = null,
+    val resolvedSystemIds: List<Int>,
+    val resolvedEdges: List<RouteHandoffResolvedEdgeDto>,
+    val mapMetadata: RouteHandoffMapMetadataDto,
+)
+
+@Serializable
+data class RouteHandoffPublisherDto(
+    val memberId: String,
+    val userId: String,
+    val displayName: String,
+    val deviceTokenId: String,
+    val deviceName: String,
+)
+
+@Serializable
+data class RouteHandoffDto(
+    val routeHandoffId: String,
+    val workspaceId: String,
+    val publisher: RouteHandoffPublisherDto,
+    val createdAt: String,
+    val expiresAt: String,
+    val type: String,
+    val originSystemId: Int,
+    val waypointSystemIds: List<Int>,
+    val destinationSystemId: Int,
+    val useAnsiblex: Boolean? = null,
+    val capitalRangeLy: Double? = null,
+    val jumpProfileId: String? = null,
+    val resolvedSystemIds: List<Int>,
+    val resolvedEdges: List<RouteHandoffResolvedEdgeDto>,
+    val mapMetadata: RouteHandoffMapMetadataDto,
+)
+
+@Serializable
+data class RouteHandoffListResponse(
+    val generatedAt: String,
+    val routeHandoffs: List<RouteHandoffDto>,
 )
 
 @Serializable
@@ -234,4 +302,57 @@ internal fun SharedMarkerSnapshot.toResponse(): SharedMarkerSnapshotResponse = S
     revision = revision,
     generatedAt = generatedAt.toString(),
     markers = markers.map { it.toDto() },
+)
+
+internal fun PublishRouteHandoffRequest.toDraft(): RouteHandoffDraft = RouteHandoffDraft(
+    type = try {
+        RouteHandoffType.valueOf(type)
+    } catch (_: IllegalArgumentException) {
+        throw dev.evesharedmap.server.service.ServiceErrors.invalid("type", "UNSUPPORTED")
+    },
+    originSystemId = originSystemId,
+    waypointSystemIds = waypointSystemIds,
+    destinationSystemId = destinationSystemId,
+    useAnsiblex = useAnsiblex,
+    capitalRangeLy = capitalRangeLy,
+    jumpProfileId = jumpProfileId,
+    resolvedSystemIds = resolvedSystemIds,
+    resolvedEdges = resolvedEdges.map {
+        RouteHandoffResolvedEdge(it.fromSystemId, it.toSystemId, it.type, it.distanceLy)
+    },
+    mapMetadata = RouteHandoffMapMetadata(
+        mapMetadata.universeBuild,
+        mapMetadata.plannerVersion,
+        mapMetadata.webPackVersion,
+    ),
+)
+
+internal fun RouteHandoff.toDto(): RouteHandoffDto = RouteHandoffDto(
+    routeHandoffId = routeHandoffId.toString(),
+    workspaceId = workspaceId.toString(),
+    publisher = RouteHandoffPublisherDto(
+        publisher.memberId.toString(),
+        publisher.userId.toString(),
+        publisher.displayName,
+        publisher.deviceTokenId.toString(),
+        publisher.deviceName,
+    ),
+    createdAt = createdAt.toString(),
+    expiresAt = expiresAt.toString(),
+    type = draft.type.name,
+    originSystemId = draft.originSystemId,
+    waypointSystemIds = draft.waypointSystemIds,
+    destinationSystemId = draft.destinationSystemId,
+    useAnsiblex = draft.useAnsiblex,
+    capitalRangeLy = draft.capitalRangeLy,
+    jumpProfileId = draft.jumpProfileId,
+    resolvedSystemIds = draft.resolvedSystemIds,
+    resolvedEdges = draft.resolvedEdges.map {
+        RouteHandoffResolvedEdgeDto(it.fromSystemId, it.toSystemId, it.type, it.distanceLy)
+    },
+    mapMetadata = RouteHandoffMapMetadataDto(
+        draft.mapMetadata.universeBuild,
+        draft.mapMetadata.plannerVersion,
+        draft.mapMetadata.webPackVersion,
+    ),
 )

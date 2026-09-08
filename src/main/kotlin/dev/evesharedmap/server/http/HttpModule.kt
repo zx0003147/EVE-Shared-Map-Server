@@ -6,6 +6,7 @@ import dev.evesharedmap.server.health.ReadinessProbe
 import dev.evesharedmap.server.health.healthRoutes
 import dev.evesharedmap.server.logging.installStructuredAccessLogging
 import dev.evesharedmap.server.marker.SharedMarkerService
+import dev.evesharedmap.server.route.RouteHandoffService
 import dev.evesharedmap.server.meta.metaRoutes
 import dev.evesharedmap.server.security.InMemoryTokenBucketRateLimiter
 import dev.evesharedmap.server.security.RateLimiter
@@ -55,6 +56,7 @@ fun Application.configureHttp(
     clock: Clock = Clock.systemUTC(),
     sharedMapService: SharedMapService? = null,
     sharedMarkerService: SharedMarkerService? = null,
+    routeHandoffService: RouteHandoffService? = null,
     universeBuild: String = SolarSystemAllowlist.load().universeBuild,
     rateLimiter: RateLimiter = InMemoryTokenBucketRateLimiter(clock),
     allowedOrigins: Set<AllowedWebOrigin> = emptySet(),
@@ -168,7 +170,12 @@ fun Application.configureHttp(
         healthRoutes(readinessProbe, serverVersion, clock, publicRateGuard)
         metaRoutes(serverVersion, universeBuild, publicRateGuard)
         if (sharedMapService != null) {
-            sharedMapRoutes(sharedMapService, sharedMarkerService, rateLimiter = rateLimiter)
+            sharedMapRoutes(
+                sharedMapService,
+                sharedMarkerService,
+                routeHandoffService,
+                rateLimiter = rateLimiter,
+            )
         }
         additionalRoutes()
     }

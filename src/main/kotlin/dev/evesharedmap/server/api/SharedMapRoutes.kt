@@ -4,6 +4,7 @@ import dev.evesharedmap.server.domain.AuthenticationPrincipal
 import dev.evesharedmap.server.domain.WorkspaceCapability
 import dev.evesharedmap.server.domain.WorkspaceRole
 import dev.evesharedmap.server.marker.SharedMarkerService
+import dev.evesharedmap.server.route.RouteHandoffService
 import dev.evesharedmap.server.security.RateLimiter
 import dev.evesharedmap.server.security.RateLimits
 import dev.evesharedmap.server.service.AuthorizationService
@@ -38,6 +39,7 @@ import java.util.UUID
 fun Route.sharedMapRoutes(
     service: SharedMapService,
     markerService: SharedMarkerService? = null,
+    routeHandoffService: RouteHandoffService? = null,
     authorization: AuthorizationService = AuthorizationService(),
     rateLimiter: RateLimiter,
 ) {
@@ -196,6 +198,39 @@ fun Route.sharedMapRoutes(
                 call.enforceMarkerWriteRate(rateLimiter, principal)
                 markerService.delete(connection, principal, markerId, expectedVersion, call.requestId())
                 MutationResponse(204, null)
+            }
+        }
+    }
+
+    if (routeHandoffService != null) {
+        get("/api/v1/workspaces/{workspaceId}/route-handoffs") {
+            val principal = call.authenticate(service)
+            call.enforceAuthenticatedReadRate(rateLimiter, principal)
+            val workspaceId = canonicalUuid(call.parameters["workspaceId"])
+            authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.READ)
+            call.respond(
+                RouteHandoffListResponse(
+                    generatedAt = java.time.Instant.now().toString(),
+                    routeHandoffs = routeHandoffService.listRecent(workspaceId).map { it.toDto() },
+                ),
+            )
+        }
+
+        post("/api/v1/workspaces/{workspaceId}/route-handoffs") {
+            val principal = call.authenticate(service)
+            val workspaceId = canonicalUuid(call.parameters["workspaceId"])
+            authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.ROUTE_HANDOFF_WRITE)
+            val body = call.receiveStrictJson<PublishRouteHandoffRequest>()
+            call.executeMutation(
+                service,
+                principal,
+                call.requireIdempotencyKey(),
+                mutationFingerprint("POST", "/api/v1/workspaces/$workspaceId/route-handoffs", body.json),
+                requiredCapability = WorkspaceCapability.ROUTE_HANDOFF_WRITE,
+            ) { connection ->
+                call.enforceMarkerWriteRate(rateLimiter, principal)
+                val handoff = routeHandoffService.publish(connection, principal, body.value.toDraft(), call.requestId())
+                MutationResponse(201, PROTOCOL_JSON.encodeToJsonElement(handoff.toDto()))
             }
         }
     }

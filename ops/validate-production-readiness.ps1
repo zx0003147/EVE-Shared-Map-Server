@@ -206,7 +206,7 @@ SHARED_MAP_BACKUP_STAGING_HOST_DIR="$(& $toDockerPath $stagingRoot)"
 SHARED_MAP_BACKUP_OFFSITE_HOST_DIR="$(& $toDockerPath $offsiteRoot)"
 SHARED_MAP_BACKUP_DAILY_RETENTION=30
 SHARED_MAP_BACKUP_MONTHLY_RETENTION=12
-SHARED_MAP_EXPECTED_FLYWAY_VERSION=3
+SHARED_MAP_EXPECTED_FLYWAY_VERSION=4
 SHARED_MAP_LOG_LEVEL=INFO
 "@
     [IO.File]::WriteAllText($envFile, $envContent, $utf8NoBom)
@@ -273,6 +273,7 @@ SHARED_MAP_LOG_LEVEL=INFO
     Assert-True ($meta.Json.serverVersion -eq $ExpectedServerVersion) 'Meta endpoint reported an unexpected Server version.'
     Assert-True ($meta.Json.protocolVersion -eq 1) 'Protocol metadata is not V1.'
     Assert-True ($meta.Json.features -contains 'shared-markers') 'Shared Marker feature metadata is missing.'
+    Assert-True ($meta.Json.features -contains 'route-handoffs') 'Route Handoff feature metadata is missing.'
     Assert-True ([bool]$meta.Json.universeBuild) 'Universe build metadata is missing.'
 
     $corsRequest = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "$httpsBase/api/v1/meta")
@@ -361,6 +362,28 @@ SHARED_MAP_LOG_LEVEL=INFO
     $snapshot = Send-ApiRequest GET "$httpsBase/api/v1/workspaces/$workspaceId/markers" $null $token
     Assert-True ($snapshot.Json.markers.Count -eq 1) 'Primary database marker snapshot was unexpected.'
 
+    $routeHandoff = Send-ApiRequest POST "$httpsBase/api/v1/workspaces/$workspaceId/route-handoffs" @{
+        type = 'NORMAL'
+        originSystemId = 30000142
+        waypointSystemIds = @()
+        destinationSystemId = 30000144
+        useAnsiblex = $false
+        resolvedSystemIds = @(30000142, 30000144)
+        resolvedEdges = @(@{
+            fromSystemId = 30000142
+            toSystemId = 30000144
+            type = 'STARGATE'
+        })
+        mapMetadata = @{
+            universeBuild = [string]$meta.Json.universeBuild
+            plannerVersion = '1.8.0'
+            webPackVersion = 'validation'
+        }
+    } $token ([Guid]::NewGuid().ToString())
+    Assert-True ([bool]$routeHandoff.Json.routeHandoffId) 'Synthetic Route Handoff was not created.'
+    $routeHandoffs = Send-ApiRequest GET "$httpsBase/api/v1/workspaces/$workspaceId/route-handoffs" $null $token
+    Assert-True ($routeHandoffs.Json.routeHandoffs.Count -eq 1) 'Primary database Route Handoff snapshot was unexpected.'
+
     $auditCount = (Invoke-Compose exec --no-TTY postgres sh -c 'psql -U "$(cat /run/secrets/db_username)" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM audit_events;"' | Select-Object -First 1).Trim()
     Assert-True ([int]$auditCount -gt 0) 'Primary database contains no audit events.'
 
@@ -392,6 +415,7 @@ SHARED_MAP_LOG_LEVEL=INFO
     $restoreText = $restoreOutput -join "`n"
     Assert-True ($restoreText -match 'restore_status=success') 'Isolated restore did not report success.'
     Assert-True ($restoreText -match 'restore_marker_count=1') 'Restored marker count is incorrect.'
+    Assert-True ($restoreText -match 'restore_route_handoff_count=1') 'Restored Route Handoff count is incorrect.'
     Assert-True ($restoreText -match 'restore_audit_count=[1-9][0-9]*') 'Restored audit data is missing.'
 
     $networkName = "$projectName`_database"
@@ -436,6 +460,13 @@ SHARED_MAP_LOG_LEVEL=INFO
         sh -c 'wget -q -O - --header="Authorization: Bearer $TEST_TOKEN" "http://127.0.0.1:8080$TEST_PATH"') -join "`n"
     $restoredSnapshot = $restoredSnapshotText | ConvertFrom-Json
     Assert-True ($restoredSnapshot.markers.Count -eq 1) 'Restored Server authentication/marker smoke failed.'
+    $restoredRouteText = (Invoke-Docker exec `
+        --env "TEST_TOKEN=$token" `
+        --env "TEST_PATH=/api/v1/workspaces/$workspaceId/route-handoffs" `
+        $restoreContainer `
+        sh -c 'wget -q -O - --header="Authorization: Bearer $TEST_TOKEN" "http://127.0.0.1:8080$TEST_PATH"') -join "`n"
+    $restoredRoutes = $restoredRouteText | ConvertFrom-Json
+    Assert-True ($restoredRoutes.routeHandoffs.Count -eq 1) 'Restored Server authentication/Route Handoff smoke failed.'
 
     $null = Invoke-Compose restart postgres
     $null = Wait-Healthy postgres
@@ -455,6 +486,8 @@ SHARED_MAP_LOG_LEVEL=INFO
     $null = Wait-Healthy caddy
     $postRestartSnapshot = Send-ApiRequest GET "$httpsBase/api/v1/workspaces/$workspaceId/markers" $null $token
     Assert-True ($postRestartSnapshot.Json.markers.Count -eq 1) 'HTTPS marker read failed after Server/Caddy restart.'
+    $postRestartRoutes = Send-ApiRequest GET "$httpsBase/api/v1/workspaces/$workspaceId/route-handoffs" $null $token
+    Assert-True ($postRestartRoutes.Json.routeHandoffs.Count -eq 1) 'HTTPS Route Handoff read failed after Server/Caddy restart.'
 
     $null = Send-ApiRequest DELETE "$httpsBase/api/v1/workspaces/$workspaceId/markers/${validationMarkerId}?expectedVersion=1" $null $token ([Guid]::NewGuid().ToString())
     $emptySnapshot = Send-ApiRequest GET "$httpsBase/api/v1/workspaces/$workspaceId/markers" $null $token
@@ -533,12 +566,14 @@ SHARED_MAP_LOG_LEVEL=INFO
         protocol = [int]$meta.Json.protocolVersion
         universeBuild = [string]$meta.Json.universeBuild
         markerRoundTrip = $true
+        routeHandoffRoundTrip = $true
         encryptedBackup = $true
         dailyRetention = 'configured=30, tested=2'
         monthlyRetention = 'configured=12, tested=1'
         isolatedRestore = $true
         restoredAuthentication = $true
         restoredMarkerCount = 1
+        restoredRouteHandoffCount = 1
         restoredAuditCount = [int]([regex]::Match($restoreText, 'restore_audit_count=([0-9]+)').Groups[1].Value)
         postgresRestartRecovery = $true
         serverCaddyRestartRecovery = $true

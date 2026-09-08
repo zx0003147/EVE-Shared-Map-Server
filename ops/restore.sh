@@ -121,7 +121,7 @@ pg_restore $connection_args \
     --no-privileges \
     "$dump_tmp"
 
-expected_flyway_version="${SHARED_MAP_EXPECTED_FLYWAY_VERSION:-3}"
+expected_flyway_version="${SHARED_MAP_EXPECTED_FLYWAY_VERSION:-4}"
 case "$expected_flyway_version" in
     ""|*[!0-9]*) echo "restore failed: expected Flyway version must be numeric" >&2; exit 2 ;;
 esac
@@ -135,6 +135,8 @@ fi
 # shellcheck disable=SC2086
 marker_count="$(psql $connection_args --dbname "$target_database" --tuples-only --no-align --command 'SELECT count(*) FROM shared_markers;')"
 # shellcheck disable=SC2086
+route_handoff_count="$(psql $connection_args --dbname "$target_database" --tuples-only --no-align --command 'SELECT count(*) FROM route_handoffs;')"
+# shellcheck disable=SC2086
 audit_count="$(psql $connection_args --dbname "$target_database" --tuples-only --no-align --command 'SELECT count(*) FROM audit_events;')"
 unset PGPASSWORD database_password
 
@@ -142,4 +144,5 @@ echo "restore_status=success"
 echo "restore_target_database=$target_database"
 echo "restore_flyway_version=$expected_flyway_version"
 echo "restore_marker_count=$marker_count"
+echo "restore_route_handoff_count=$route_handoff_count"
 echo "restore_audit_count=$audit_count"

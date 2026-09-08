@@ -69,7 +69,7 @@ class Phase2PostgreSqlIntegrationTest {
     lateinit var tempDirectory: Path
 
     @Test
-    fun `Phase 1 schema upgrades through Phase 3 exactly once`() {
+    fun `Phase 1 schema upgrades through Phase 4 exactly once`() {
         val bundle = newBundle(migrate = false)
         bundle.use {
             val v1Directory = tempDirectory.resolve("v1")
@@ -86,10 +86,10 @@ class Phase2PostgreSqlIntegrationTest {
             val upgrade = FlywayMigrator(bundle.dataSource, schemas = arrayOf(bundle.schema)).migrateAndValidate()
             val repeat = FlywayMigrator(bundle.dataSource, schemas = arrayOf(bundle.schema)).migrateAndValidate()
 
-            assertEquals(2, upgrade.migrationsExecuted)
-            assertEquals("3", upgrade.currentVersion)
+            assertEquals(3, upgrade.migrationsExecuted)
+            assertEquals("4", upgrade.currentVersion)
             assertEquals(0, repeat.migrationsExecuted)
-            assertEquals(8, bundle.businessTables().size)
+            assertEquals(9, bundle.businessTables().size)
         }
     }
 

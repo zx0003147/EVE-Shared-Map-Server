@@ -15,6 +15,7 @@ class AuthorizationService {
             val required = when (capability) {
                 WorkspaceCapability.READ -> "VIEWER"
                 WorkspaceCapability.MARKER_WRITE -> "EDITOR or ADMIN"
+                WorkspaceCapability.ROUTE_HANDOFF_WRITE -> "EDITOR or ADMIN"
                 WorkspaceCapability.ADMIN -> "ADMIN"
             }
             throw ServiceErrors.forbidden("$required role is required for this operation.")
