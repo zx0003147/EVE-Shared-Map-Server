@@ -4,3 +4,9 @@ services:
   shared-map-server:
     ports:
       - "127.0.0.1:${SHARED_MAP_VALIDATION_SERVER_PORT:?Set a validation-only loopback port}:8080"
+  caddy:
+    volumes:
+      - type: bind
+        source: ${SHARED_MAP_VALIDATION_WEB_ROOT:?Set the validation Web root}
+        target: /srv/eve-map
+        read_only: true

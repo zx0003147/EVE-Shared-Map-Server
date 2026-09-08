@@ -6,10 +6,10 @@ This runbook deploys the V1 EVE Shared Map Server as one self-hosted instance. T
 Internet (TCP 80/443)
         |
       Caddy
-        |
-  shared-map-server
-        |
- PostgreSQL 18.6
+      /     \
+ Web/PWA   shared-map-server
+  files           |
+             PostgreSQL 18.6
 ```
 
 Only Caddy publishes host ports. The application port and PostgreSQL are Docker-internal. Shared Marker notes are
@@ -102,6 +102,10 @@ Recommended host layout:
   docker-compose.prod.yml
   .env.production
   ops/
+  release/self-hosted-release.json
+  web/
+    current -> releases/<web-version>-<artifact-hash>/
+    releases/
   secrets/
   backups-local-staging/
 /mnt/eve-shared-map-offsite/   # storage outside this VPS
@@ -135,7 +139,9 @@ writes identical database values to two files, owns each file by its consuming n
 root, grants the deployment group traverse-only access (0710), and prevents that human group from listing or reading
 the secrets. Never commit these files, bake them into an image, put their values in normal environment variables, or
 print them in logs. Copy `.env.production.example` to `.env.production`, set the real domain, image references,
-consumer-specific paths, and resource limits, then protect it with mode 0600.
+consumer-specific paths, and resource limits. Use mode 0600 for a root-run manual deployment. Installer-managed
+deployments use root ownership, the dedicated `eve-map` group, and mode 0640 so the backup timer can read paths and
+non-secret settings without gaining access to any secret file content.
 
 Set `SHARED_MAP_ALLOWED_ORIGINS` to the exact HTTPS origin serving EVE Static Map Planner Web, not the API origin
 unless they are the same. Multiple approved Web deployments are comma-separated. Do not use a wildcard, path, or
@@ -151,14 +157,31 @@ encrypted database dump.
 
 ## DNS and TLS
 
-Choose the production domain with the operator. Add an A record to the VPS public IPv4 address. Add AAAA only when
-IPv6 routing and firewalling are proven. Verify authoritative and external resolution before starting Caddy. Caddy
-then obtains and renews the public certificate and redirects HTTP to HTTPS.
+Choose distinct Shared Marker and Web Map hostnames with the operator. Add an A record for each hostname to the same
+VPS public IPv4 address. A Web subdomain does not require a second registered domain. Add AAAA only when IPv6 routing
+and firewalling are proven. Verify authoritative and external resolution before starting Caddy. Caddy then obtains
+and renews both public certificates and redirects HTTP to HTTPS.
 
-`ops/caddy/Caddyfile` limits request bodies to 32 KiB and adds HSTS and `nosniff`, which are meaningful for this JSON
-API. Caddy access logging is intentionally not enabled, avoiding request-header and query-string retention; process
-logs still go to Docker. If access logging is added later, Authorization, Cookie, request/response bodies, and
-sensitive query strings must be removed.
+`ops/caddy/Caddyfile` retains the API request-body limit and reverse proxy, and adds the second static Web site from
+the read-only `/srv/eve-map/current` mount. Both sites add HSTS and `nosniff`. The Web site revalidates HTML, the
+service worker, and `data/manifest.json`; versioned Web Packs are immutable and served as `application/gzip` without
+`Content-Encoding`, because the browser verifies compressed bytes before using `DecompressionStream`. Caddy access
+logging is intentionally not enabled, avoiding request-header and query-string retention; process logs still go to
+Docker. If access logging is added later, Authorization, Cookie, request/response bodies, and sensitive query strings
+must be removed.
+
+## Beginner installer
+
+The top-level `install.sh` is a guided wrapper around the production controls in this runbook. It supports only
+Ubuntu 24.04 LTS x86_64, refuses an existing installation, checks minimum RAM/disk and port availability, installs
+Docker from Docker's official apt repository when necessary, generates the established UID-specific secret files,
+downloads the release-locked Planner Web ZIP, verifies SHA-256 and its internal Web Pack, then invokes `ops/deploy.sh`.
+It never builds a random Server or Kotlin/JS checkout on the VPS.
+
+The installer consumes a small release manifest containing `selfHostedVersion`, `webVersion`, `serverVersion`,
+`webArtifactUrl`, `webSha256`, exact `serverImage`/`opsImage`, `flywayVersion`, and `minimumInstallerVersion`. The
+example under `release/` is non-deployable documentation; a release operator must publish a filled manifest and
+artifact. Generated Web bundles are not committed to this repository.
 
 ## Deploy
 
@@ -173,8 +196,12 @@ docker compose --env-file .env.production -f docker-compose.prod.yml --profile o
 the server, and Caddy, waits for health, verifies Flyway schema 3, and checks the public health and meta endpoints:
 
 ```sh
-./ops/deploy.sh /opt/eve-shared-map/.env.production https://map.example.com
+./ops/deploy.sh /opt/eve-shared-map/.env.production \
+  https://markers.example.com https://map.example.com
 ```
+
+In addition to the existing health/meta/Flyway checks, the deploy executor verifies the public Web root, Web Pack
+manifest and versioned gzip response, absence of `Content-Encoding`, exact Web-origin CORS, and browser preflight.
 
 Flyway runs before the application listens. A migration failure prevents application health and must not be hidden.
 The compose file never publishes PostgreSQL or port 8080 and never removes the persistent PostgreSQL volume.
@@ -281,6 +308,31 @@ compatible with the migrated schema, pinning the prior image is sufficient. A fo
 the old application incompatible; switching images alone is then unsafe. Restore the pre-deploy database into an
 isolated database, validate it, and perform an explicitly approved production restore when schema rollback is
 required. Never use Flyway `clean` or automatic `repair`.
+
+For installer-managed deployments, `sudo eve-map update [manifest-url]` implements this sequence. It runs the
+existing encrypted backup before changing anything, stages and validates the new Web release, updates only the exact
+Server/Ops image and expected Flyway fields, atomically switches the Web symlink, and runs the deploy executor. When
+the Flyway version is unchanged, a failed deployment restores the prior env, release manifest, and Web symlink and
+attempts the prior application deployment. If a forward-only migration may have run, it restores only the Web site
+and stops with the explicit database-restore guidance above; it never attempts an automatic Flyway downgrade.
+
+## Installer-managed operations
+
+- `eve-map status`: concise Web/API/PostgreSQL/Caddy/Flyway/Web Pack/HTTPS health.
+- `eve-map update`: backed-up, release-manifest-locked Web and Server update.
+- `eve-map restart`: restart Server/Caddy and rerun public production validation.
+- `eve-map logs [service]`: bounded service logs passed through credential redaction.
+- `eve-map diagnostics`: copy-safe host, DNS, Docker, health, schema, Web, cache, CORS, and backup state; secret files
+  are never read.
+- `eve-map backup`: wrapper around the existing encrypted backup container.
+- `eve-map web-pack <file-or-directory>`: validate the Desktop schema/size/checksum/gzip, publish the versioned Pack,
+  then atomically replace `data/manifest.json` without touching PostgreSQL or Shared Marker.
+- `eve-map version`: installed compatibility and Web Pack versions.
+
+There is intentionally no automatic uninstall in this release. To remove application containers while keeping all
+data, stop only the named services and retain `/opt/eve-shared-map`, its secrets/backups/Web releases, and the named
+PostgreSQL volume. A full deletion is a separate destructive maintenance procedure that must inventory backups and
+require an explicit `DELETE ALL DATA` confirmation; it is not delegated to the beginner CLI.
 
 ## Disaster recovery
 

@@ -14,3 +14,38 @@
 
 	reverse_proxy shared-map-server:8080
 }
+
+{$SHARED_MAP_WEB_DOMAIN} {
+	root * /srv/eve-map/current
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+
+	@dataManifest path /data/manifest.json
+	header @dataManifest Cache-Control "no-cache, must-revalidate"
+
+	@versionedPack path_regexp versionedPack ^/data/web-pack-[A-Za-z0-9._-]+\.json\.gz$
+	header @versionedPack {
+		Cache-Control "public, max-age=31536000, immutable"
+		Content-Type "application/gzip"
+		-Content-Encoding
+	}
+
+	@serviceWorker path /service-worker.js
+	header @serviceWorker Cache-Control "no-cache, must-revalidate"
+
+	@html path / /index.html *.html
+	header @html Cache-Control "no-cache, must-revalidate"
+
+	@webManifest path *.webmanifest
+	header @webManifest Content-Type "application/manifest+json; charset=utf-8"
+
+	@mjs path *.mjs
+	header @mjs Content-Type "text/javascript; charset=utf-8"
+
+	@compressible not path /data/web-pack-*.json.gz
+	encode @compressible zstd gzip
+	file_server
+}

@@ -24,6 +24,7 @@ $testRoot = Join-Path $repoRoot ".phase8a-validation-$runId"
 $secretRoot = Join-Path $testRoot 'secrets'
 $stagingRoot = Join-Path $testRoot 'staging'
 $offsiteRoot = Join-Path $testRoot 'offsite'
+$webRoot = Join-Path $testRoot 'web'
 $envFile = Join-Path $testRoot '.env.production'
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $httpPort = 0
@@ -127,9 +128,47 @@ function Assert-True {
     if (-not $Condition) { throw $Message }
 }
 
+function Assert-ContentType {
+    param([string]$Url, [string]$ExpectedMediaType)
+    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $Url)
+    $response = $client.Send($request)
+    try {
+        Assert-True $response.IsSuccessStatusCode "Static asset was not readable: $Url"
+        Assert-True ([string]$response.Content.Headers.ContentType.MediaType -eq $ExpectedMediaType) "Unexpected MIME type for ${Url}: $($response.Content.Headers.ContentType)"
+    } finally {
+        $response.Dispose()
+        $request.Dispose()
+    }
+}
+
 try {
     Assert-True (Test-Path -LiteralPath $DockerBin -PathType Leaf) "Docker CLI was not found at $DockerBin"
-    New-Item -ItemType Directory -Path $secretRoot, $stagingRoot, $offsiteRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $secretRoot, $stagingRoot, $offsiteRoot, (Join-Path $webRoot 'current/data') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $webRoot 'current/index.html'), '<!doctype html><title>EVE Map validation</title>', $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $webRoot 'current/service-worker.js'), 'self.addEventListener("fetch", () => {});', $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $webRoot 'current/web-client.js'), 'console.log("validation");', $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $webRoot 'current/web-pack-loader.mjs'), 'export const validation = true;', $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $webRoot 'current/web-client.css'), 'body { color: black; }', $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $webRoot 'current/manifest.webmanifest'), '{"name":"EVE Map validation"}', $utf8NoBom)
+    [IO.File]::WriteAllBytes((Join-Path $webRoot 'current/app-icon.png'), [byte[]](137, 80, 78, 71, 13, 10, 26, 10))
+    $validationPack = [IO.Compression.GZipStream]::new(
+        [IO.File]::Create((Join-Path $webRoot 'current/data/web-pack-validation.json.gz')),
+        [IO.Compression.CompressionLevel]::Optimal
+    )
+    try {
+        $packBytes = $utf8NoBom.GetBytes('{"schemaVersion":1,"packVersion":"validation"}')
+        $validationPack.Write($packBytes, 0, $packBytes.Length)
+    } finally {
+        $validationPack.Dispose()
+    }
+    $packPath = Join-Path $webRoot 'current/data/web-pack-validation.json.gz'
+    $packHash = (Get-FileHash -LiteralPath $packPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $packSize = (Get-Item -LiteralPath $packPath).Length
+    [IO.File]::WriteAllText(
+        (Join-Path $webRoot 'current/data/manifest.json'),
+        "{`"schemaVersion`":1,`"packVersion`":`"validation`",`"sdeBuild`":3466501,`"fileName`":`"web-pack-validation.json.gz`",`"sizeBytes`":$packSize,`"sha256`":`"$packHash`"}",
+        $utf8NoBom
+    )
     Write-Secret (Join-Path $secretRoot 'postgres-database-user.txt') 'phase8a_user'
     Write-Secret (Join-Path $secretRoot 'server-database-user.txt') 'phase8a_user'
     $databasePassword = Get-RandomSecret
@@ -145,10 +184,13 @@ try {
     $toDockerPath = { param([string]$Path) ([IO.Path]::GetFullPath($Path) -replace '\\', '/') }
     $envContent = @"
 SHARED_MAP_DOMAIN=localhost
+SHARED_MAP_WEB_DOMAIN=web.localhost
 SHARED_MAP_ACME_EMAIL=phase8a@example.invalid
 SHARED_MAP_HTTP_PORT=$httpPort
 SHARED_MAP_HTTPS_PORT=$httpsPort
 SHARED_MAP_VALIDATION_SERVER_PORT=$validationServerPort
+SHARED_MAP_VALIDATION_WEB_ROOT="$(& $toDockerPath $webRoot)"
+SHARED_MAP_ALLOWED_ORIGINS=https://web.localhost:$httpsPort
 SHARED_MAP_SERVER_IMAGE=$ServerImage
 SHARED_MAP_OPS_IMAGE=$OpsImage
 SHARED_MAP_POSTGRES_IMAGE=postgres:18.6-alpine
@@ -170,7 +212,7 @@ SHARED_MAP_LOG_LEVEL=INFO
     [IO.File]::WriteAllText($envFile, $envContent, $utf8NoBom)
 
     $null = Invoke-Compose --profile ops config --quiet
-    $null = Invoke-Compose up --detach postgres shared-map-server caddy
+    $null = Invoke-ValidationCompose up --detach postgres shared-map-server caddy
     $postgresId = Wait-Healthy postgres
     $serverId = Wait-Healthy shared-map-server
     $caddyId = Wait-Healthy caddy
@@ -180,7 +222,10 @@ SHARED_MAP_LOG_LEVEL=INFO
     $postgresPortBinding = $postgresInspect.HostConfig.PortBindings.PSObject.Properties | Where-Object Name -eq '5432/tcp'
     $serverPortBinding = $serverInspect.HostConfig.PortBindings.PSObject.Properties | Where-Object Name -eq '8080/tcp'
     Assert-True (-not $postgresPortBinding -or $null -eq $postgresPortBinding.Value) 'PostgreSQL unexpectedly has a host port binding.'
-    Assert-True (-not $serverPortBinding -or $null -eq $serverPortBinding.Value) 'Server unexpectedly has a host port binding.'
+    $serverBindings = @($serverPortBinding.Value)
+    Assert-True ($serverBindings.Count -eq 1) 'Validation Server must have exactly one loopback-only host binding.'
+    Assert-True ($serverBindings[0].HostIp -eq '127.0.0.1') 'Validation Server host binding was not loopback-only.'
+    Assert-True ([int]$serverBindings[0].HostPort -eq $validationServerPort) 'Validation Server used an unexpected host port.'
     Assert-True ($serverInspect.Config.User -eq '10001:10001') 'Server is not running as UID/GID 10001.'
     Assert-True ([bool]$serverInspect.HostConfig.ReadonlyRootfs) 'Server root filesystem is not read-only.'
     Assert-True ($serverInspect.HostConfig.CapDrop -contains 'ALL') 'Server capabilities were not dropped.'
@@ -194,9 +239,11 @@ SHARED_MAP_LOG_LEVEL=INFO
     $handler = [Net.Http.HttpClientHandler]::new()
     $handler.ServerCertificateCustomValidationCallback = [Net.Http.HttpClientHandler]::DangerousAcceptAnyServerCertificateValidator
     $handler.AllowAutoRedirect = $false
+    $handler.UseProxy = $false
     $client = [Net.Http.HttpClient]::new($handler)
     $client.Timeout = [TimeSpan]::FromSeconds(15)
     $httpsBase = "https://localhost:$httpsPort"
+    $webBase = "https://web.localhost:$httpsPort"
     $httpBase = "http://localhost:$httpPort"
 
     $redirectRequest = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "$httpBase/health")
@@ -227,6 +274,65 @@ SHARED_MAP_LOG_LEVEL=INFO
     Assert-True ($meta.Json.protocolVersion -eq 1) 'Protocol metadata is not V1.'
     Assert-True ($meta.Json.features -contains 'shared-markers') 'Shared Marker feature metadata is missing.'
     Assert-True ([bool]$meta.Json.universeBuild) 'Universe build metadata is missing.'
+
+    $corsRequest = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "$httpsBase/api/v1/meta")
+    $null = $corsRequest.Headers.TryAddWithoutValidation('Origin', $webBase)
+    $corsResponse = $client.Send($corsRequest)
+    try {
+        Assert-True $corsResponse.IsSuccessStatusCode 'CORS validation request failed.'
+        $allowedOrigins = @($corsResponse.Headers.GetValues('Access-Control-Allow-Origin'))
+        Assert-True ($allowedOrigins.Count -eq 1 -and $allowedOrigins[0] -eq $webBase) 'Shared Marker did not return the exact Web origin for CORS.'
+    } finally {
+        $corsResponse.Dispose()
+        $corsRequest.Dispose()
+    }
+
+    $webIndexRequest = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "$webBase/")
+    $webIndexResponse = $client.Send($webIndexRequest)
+    try {
+        $webIndexText = $webIndexResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        Assert-True $webIndexResponse.IsSuccessStatusCode 'Caddy did not serve the Web Map site.'
+        Assert-True ($webIndexText -match 'EVE Map validation') 'Caddy returned unexpected Web Map content.'
+        Assert-True ([string]$webIndexResponse.Content.Headers.ContentType.MediaType -eq 'text/html') 'Web Map HTML MIME type was incorrect.'
+        Assert-True $webIndexResponse.Headers.CacheControl.NoCache 'Web Map HTML did not require revalidation.'
+    } finally {
+        $webIndexResponse.Dispose()
+        $webIndexRequest.Dispose()
+    }
+    Assert-ContentType "$webBase/web-client.js" 'text/javascript'
+    Assert-ContentType "$webBase/web-pack-loader.mjs" 'text/javascript'
+    Assert-ContentType "$webBase/web-client.css" 'text/css'
+    Assert-ContentType "$webBase/data/manifest.json" 'application/json'
+    Assert-ContentType "$webBase/manifest.webmanifest" 'application/manifest+json'
+    Assert-ContentType "$webBase/app-icon.png" 'image/png'
+    $serviceWorkerRequest = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "$webBase/service-worker.js")
+    $serviceWorkerResponse = $client.Send($serviceWorkerRequest)
+    try {
+        Assert-True $serviceWorkerResponse.IsSuccessStatusCode 'Service worker was not publicly readable.'
+        Assert-True $serviceWorkerResponse.Headers.CacheControl.NoCache 'Service worker did not require revalidation.'
+    } finally {
+        $serviceWorkerResponse.Dispose()
+        $serviceWorkerRequest.Dispose()
+    }
+    $webManifestRequest = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "$webBase/data/manifest.json")
+    $webManifestResponse = $client.Send($webManifestRequest)
+    try {
+        Assert-True $webManifestResponse.IsSuccessStatusCode 'Web Pack manifest was not publicly readable.'
+        Assert-True ($webManifestResponse.Headers.CacheControl.NoCache) 'Web Pack manifest did not require revalidation.'
+    } finally {
+        $webManifestResponse.Dispose()
+        $webManifestRequest.Dispose()
+    }
+    $webPackRequest = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "$webBase/data/web-pack-validation.json.gz")
+    $webPackResponse = $client.Send($webPackRequest)
+    try {
+        Assert-True $webPackResponse.IsSuccessStatusCode 'Versioned Web Pack was not publicly readable.'
+        Assert-True ($null -eq $webPackResponse.Content.Headers.ContentEncoding -or $webPackResponse.Content.Headers.ContentEncoding.Count -eq 0) 'Web Pack unexpectedly had Content-Encoding.'
+        Assert-True ([string]$webPackResponse.Content.Headers.ContentType.MediaType -eq 'application/gzip') 'Web Pack MIME type was incorrect.'
+    } finally {
+        $webPackResponse.Dispose()
+        $webPackRequest.Dispose()
+    }
 
     $bootstrapOutput = Invoke-Compose run --rm --no-deps shared-map-server bootstrap-admin --display-name Phase8A_Admin --workspace-name Phase8A_Validation --invite-ttl 1h
     $bootstrapText = $bootstrapOutput -join "`n"
@@ -386,7 +492,7 @@ SHARED_MAP_LOG_LEVEL=INFO
             $e2eInvite = $null
             Push-Location $mapRoot
             try {
-                & $mapGradle --no-daemon --console=plain :shared-client:test `
+                & $mapGradle --no-daemon --console=plain :shared-client:jvmTest `
                     --tests dev.evestaticmapplanner.shared.integration.RealSharedMapServerIntegrationTest `
                     --rerun-tasks
                 if ($LASTEXITCODE -ne 0) { throw 'Real Shared Map client E2E failed.' }
@@ -418,6 +524,9 @@ SHARED_MAP_LOG_LEVEL=INFO
         serverReadOnly = [bool]$serverInspect.HostConfig.ReadonlyRootfs
         secretMounts = 3
         caddyHttps = $true
+        exactWebOriginCors = $true
+        webStaticSite = $true
+        webPackTransportContract = $true
         httpRedirect = $true
         health = 'ok'
         serverVersion = [string]$meta.Json.serverVersion

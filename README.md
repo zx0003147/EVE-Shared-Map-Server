@@ -4,7 +4,59 @@ EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. V
 Workspace, membership, invite, device-token, authentication, authorization, audit, idempotency, and complete Shared
 Marker server API. The Map desktop repository is not a dependency of this server and remains usable without it.
 
-## Prerequisites
+## Quick Install (self-hosted)
+
+You need only:
+
+- an Ubuntu 24.04 LTS x86_64 VPS with at least 2 GiB RAM and 20 GiB free disk;
+- a domain you can edit;
+- SSH access with `sudo`.
+
+From a published self-hosted release checkout, run:
+
+```sh
+git clone https://github.com/zx0003147/EVE-Shared-Map-Server.git
+cd EVE-Shared-Map-Server
+sudo ./install.sh
+```
+
+The installer asks for the Shared Marker hostname, Web Map hostname, certificate email, Workspace name, and first
+Admin display name. It then shows the two DNS A records to create and waits until both point to the VPS. Everything
+else—official Docker Engine installation, PostgreSQL, Caddy HTTPS, file-mounted secrets, the verified Planner Web
+artifact, exact Server images, Flyway, health checks, exact-origin CORS, and first-Admin bootstrap—is automated.
+
+When installation finishes, save the one-time Admin invite immediately. It is deliberately neither logged nor
+stored. Open the displayed Web Map URL and use the Shared Marker URL with that invite.
+
+Common operations are intentionally short:
+
+```sh
+sudo eve-map status
+sudo eve-map update
+sudo eve-map restart
+sudo eve-map logs
+sudo eve-map diagnostics
+sudo eve-map backup
+sudo eve-map web-pack /path/to/EVE-Web-Pack
+sudo eve-map version
+```
+
+`update` always creates the existing encrypted backup first and never removes the PostgreSQL volume. `web-pack`
+publishes the versioned gzip before atomically replacing `data/manifest.json`; it does not restart PostgreSQL or the
+Shared Marker service. `diagnostics` never reads secret files and redacts invites, device tokens, Authorization, DB
+password, token-pepper, passphrase, and generic secret assignments.
+
+The installer creates a protected local backup copy so backups work immediately. For real disaster recovery, mount
+storage whose failure domain is outside the VPS at `/opt/eve-shared-map/backups-offsite`; a directory on the same VPS
+is not an off-site backup. Firewall and SSH hardening remain provider-specific—allow the proven SSH port plus TCP
+80/443, and never expose 5432 or 8080. See [Production deployment](docs/PRODUCTION-DEPLOYMENT.md) for those advanced
+operator responsibilities and [VPS acceptance](docs/SELF-HOSTED-ACCEPTANCE.md) before inviting real users.
+
+The source repository intentionally contains no generated Planner Web bundle and does not publish images or a
+release by itself. `install.sh` consumes the locked `self-hosted-release.json` asset from a published release; use
+`--manifest-url https://.../self-hosted-release.json` only for an approved alternate release channel.
+
+## Developer prerequisites
 
 - JDK 25 LTS
 - Docker Desktop or Docker Engine with Docker Compose
@@ -216,11 +268,11 @@ public certificate; PostgreSQL and the Ktor application remain on internal Docke
 readiness validation and configure the documented encrypted off-site backup schedule before inviting users. The full
 commands, permissions, health checks, rollback procedure, and restore drill are in the deployment runbook.
 
-In EVE Static Map Planner 1.2.0, enter the instance origin, for example `https://map.example.com`, under Shared Map
+In EVE Static Map Planner 1.7.0, enter the Shared Marker origin, for example `https://markers.example.com`, under Shared Map
 preferences and exchange a Workspace invite. `/api/v1` is appended by the client. No particular hosted domain is
 required: operators may use any correctly configured HTTPS origin.
 
-For the Phase 3 Web client, also set `SHARED_MAP_ALLOWED_ORIGINS` to the exact HTTPS origin that serves the Web map,
+For the Web client, also set `SHARED_MAP_ALLOWED_ORIGINS` to the exact HTTPS origin that serves the Web map,
 then recreate the server container. Web and API must both be HTTPS in production; browsers will block an HTTPS Web
 page from calling a remote HTTP API. Ktor remains behind the existing Caddy TLS reverse proxy. The current protocol
 uses 30-second REST polling and has no WebSocket or SSE endpoint.

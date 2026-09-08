@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# Release/Web Pack globals are outputs shared by sourced command functions.
+# shellcheck disable=SC2034
+set -Eeuo pipefail
+
+EVE_MAP_HOME="${EVE_MAP_HOME:-/opt/eve-shared-map}"
+SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Installed and source-tree layouts both keep the library beside this command.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIRECTORY/lib/eve-map-common.sh"
+
+ENV_FILE="$EVE_MAP_HOME/.env.production"
+COMPOSE_FILE="$EVE_MAP_HOME/docker-compose.prod.yml"
+STATE_FILE="$EVE_MAP_HOME/.installer-state"
+DOCKER_BIN="${DOCKER_BIN:-docker}"
+
+cli_usage() {
+    cat <<'EOF'
+Usage: eve-map <command> [options]
+
+Commands:
+  status                 Show user-friendly health and version status
+  update [manifest-url]  Back up and update the locked Web/Server release
+  restart                Restart the public application safely
+  logs [service]         Follow bounded container logs with redaction
+  diagnostics            Print a copy-safe redacted support report
+  backup                 Run the existing encrypted backup flow
+  web-pack <path>        Publish a Desktop-exported Web Pack atomically
+  version                Show installed Self-Hosted, Web, Server, and Pack versions
+EOF
+}
+
+cli_require_root() {
+    [[ "$(id -u)" == "0" ]] || eve_map_die "run this command with sudo"
+}
+
+cli_require_installation() {
+    [[ -r "$ENV_FILE" && -r "$COMPOSE_FILE" && -r "$STATE_FILE" ]] ||
+        eve_map_die "no completed EVE Map installation was found at $EVE_MAP_HOME"
+}
+
+compose() {
+    "$DOCKER_BIN" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+cli_api_origin() {
+    printf 'https://%s\n' "$(eve_map_read_env SHARED_MAP_DOMAIN "$ENV_FILE")"
+}
+
+cli_web_origin() {
+    printf 'https://%s\n' "$(eve_map_read_env SHARED_MAP_WEB_DOMAIN "$ENV_FILE")"
+}
+
+cli_service_state() {
+    local service="$1"
+    local container_id state
+    container_id="$(compose ps -q "$service" 2>/dev/null || true)"
+    [[ -n "$container_id" ]] || { printf 'NOT RUNNING'; return; }
+    state="$($DOCKER_BIN inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+    case "$state" in
+        healthy|running) printf 'OK' ;;
+        *) printf '%s' "${state^^}" ;;
+    esac
+}
+
+cli_flyway_version() {
+    # The quoted variables expand intentionally inside the PostgreSQL container.
+    # shellcheck disable=SC2016
+    compose exec -T postgres sh -c \
+        'psql -U "$(cat /run/secrets/db_username)" -d "$POSTGRES_DB" -Atc "SELECT max(version) FROM flyway_schema_history WHERE success"' \
+        2>/dev/null || true
+}
+
+cli_web_pack_summary() {
+    local manifest="$EVE_MAP_HOME/web/current/data/manifest.json"
+    if [[ -r "$manifest" ]] && jq -e '.schemaVersion == 1' "$manifest" >/dev/null 2>&1; then
+        printf 'SDE %s / %s' "$(jq -r '.sdeBuild' "$manifest")" "$(jq -r '.packVersion' "$manifest")"
+    else
+        printf 'UNAVAILABLE'
+    fi
+}
+
+cli_status() {
+    local web_state api_state https_state flyway_state expected_flyway failures=0
+    web_state="$(curl --fail --silent --show-error --max-time 10 "$(cli_web_origin)/" >/dev/null 2>&1 && printf OK || printf FAILED)"
+    api_state="$(curl --fail --silent --show-error --max-time 10 "$(cli_api_origin)/health" >/dev/null 2>&1 && printf OK || printf FAILED)"
+    https_state="$(curl --fail --silent --show-error --max-time 10 "$(cli_web_origin)/service-worker.js" >/dev/null 2>&1 && printf OK || printf FAILED)"
+    flyway_state="$(cli_flyway_version)"
+    expected_flyway="$(eve_map_read_env SHARED_MAP_EXPECTED_FLYWAY_VERSION "$ENV_FILE")"
+    [[ "$flyway_state" == "$expected_flyway" ]] || flyway_state="${flyway_state:-UNAVAILABLE} (expected $expected_flyway)"
+
+    printf 'Web Map .......... %s\n' "$web_state"
+    printf 'Shared Server .... %s\n' "$api_state"
+    printf 'PostgreSQL ....... %s\n' "$(cli_service_state postgres)"
+    printf 'Caddy ............ %s\n' "$(cli_service_state caddy)"
+    printf 'Server Container . %s\n' "$(cli_service_state shared-map-server)"
+    printf 'Flyway ........... %s\n' "$flyway_state"
+    printf 'Web Pack ......... %s\n' "$(cli_web_pack_summary)"
+    printf 'HTTPS ............ %s\n' "$https_state"
+    [[ "$web_state" == OK && "$api_state" == OK && "$https_state" == OK ]] || failures=1
+    [[ "$(cli_service_state postgres)" == OK ]] || failures=1
+    [[ "$(cli_service_state caddy)" == OK ]] || failures=1
+    [[ "$(cli_service_state shared-map-server)" == OK ]] || failures=1
+    [[ "$flyway_state" == "$expected_flyway" ]] || failures=1
+    return "$failures"
+}
+
+cli_backup() {
+    local log_directory="${EVE_MAP_LOG_DIRECTORY:-/var/log/eve-map}"
+    local log_file="$log_directory/last-backup.log"
+    install -d -o root -g eve-map -m 0750 "$log_directory"
+    if compose --profile ops run --rm backup >"$log_file" 2>&1; then
+        chmod 0640 "$log_file"
+        printf 'Backup completed.\n'
+    else
+        chmod 0640 "$log_file"
+        printf 'Backup failed. Redacted details:\n' >&2
+        eve_map_redact <"$log_file" >&2
+        return 1
+    fi
+}
+
+cli_update_state() {
+    local manifest_url="$1"
+    local temporary="$STATE_FILE.new.$$"
+    umask 077
+    cat >"$temporary" <<EOF
+installerVersion=$EVE_MAP_INSTALLER_VERSION
+selfHostedVersion=$RELEASE_SELF_HOSTED_VERSION
+webVersion=$RELEASE_WEB_VERSION
+serverVersion=$RELEASE_SERVER_VERSION
+releaseManifestUrl=$manifest_url
+installedAt=$(awk -F= '$1 == "installedAt" { print $2 }' "$STATE_FILE")
+updatedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+    chown --reference="$STATE_FILE" "$temporary"
+    chmod --reference="$STATE_FILE" "$temporary"
+    mv -f -- "$temporary" "$STATE_FILE"
+}
+
+cli_update() {
+    local manifest_url="${1:-}"
+    local work_root manifest artifact previous_link old_flyway current_flyway env_backup manifest_backup deploy_failed=0
+    if [[ -z "$manifest_url" ]]; then
+        manifest_url="$(awk -F= '$1 == "releaseManifestUrl" { print substr($0, index($0, "=") + 1) }' "$STATE_FILE")"
+    fi
+    [[ -n "$manifest_url" ]] || eve_map_die "no release manifest URL is recorded"
+    work_root="$(mktemp -d)"
+    manifest="$work_root/self-hosted-release.json"
+    artifact="$work_root/eve-map-web.zip"
+    env_backup="$work_root/.env.production.previous"
+    manifest_backup="$work_root/self-hosted-release.previous.json"
+    cp -- "$ENV_FILE" "$env_backup"
+    cp -- "$EVE_MAP_HOME/release/self-hosted-release.json" "$manifest_backup"
+    previous_link="$(eve_map_current_web_release)"
+    old_flyway="$(eve_map_read_env SHARED_MAP_EXPECTED_FLYWAY_VERSION "$ENV_FILE")"
+
+    UPDATE_WORK_ROOT="$work_root"
+    trap 'rm -rf -- "$UPDATE_WORK_ROOT"' EXIT HUP INT TERM
+    eve_map_download "$manifest_url" "$manifest"
+    eve_map_release_manifest_load "$manifest"
+    eve_map_download "$RELEASE_WEB_ARTIFACT_URL" "$artifact"
+    [[ "$(eve_map_sha256 "$artifact")" == "$RELEASE_WEB_SHA256" ]] || eve_map_die "downloaded Web artifact checksum mismatch"
+    compose --profile ops config --quiet
+    cli_status >/dev/null || eve_map_die "pre-update health check failed; run: sudo eve-map diagnostics"
+    [[ "$old_flyway" =~ ^[0-9]+$ ]] || eve_map_die "installed Flyway version is invalid"
+    (( RELEASE_FLYWAY_VERSION >= old_flyway )) ||
+        eve_map_die "Flyway downgrade is unsupported; restore an isolated backup instead"
+    if [[ "$RELEASE_FLYWAY_VERSION" != "$old_flyway" ]]; then
+        printf 'This release advances Flyway from %s to %s; automatic database downgrade is not possible.\n' \
+            "$old_flyway" "$RELEASE_FLYWAY_VERSION"
+    fi
+    printf 'Creating the required pre-update encrypted backup...\n'
+    cli_backup
+    eve_map_stage_web_artifact "$artifact" "$RELEASE_WEB_SHA256" "$RELEASE_WEB_VERSION"
+
+    eve_map_set_env SHARED_MAP_SERVER_IMAGE "$RELEASE_SERVER_IMAGE" "$ENV_FILE"
+    eve_map_set_env SHARED_MAP_OPS_IMAGE "$RELEASE_OPS_IMAGE" "$ENV_FILE"
+    eve_map_set_env SHARED_MAP_EXPECTED_FLYWAY_VERSION "$RELEASE_FLYWAY_VERSION" "$ENV_FILE"
+    install -o root -g eve-map -m 0644 "$manifest" "$EVE_MAP_HOME/release/self-hosted-release.json"
+    eve_map_switch_web_release "$STAGED_WEB_RELEASE"
+
+    if ! "$EVE_MAP_HOME/ops/deploy.sh" "$ENV_FILE" "$(cli_api_origin)" "$(cli_web_origin)"; then
+        deploy_failed=1
+    fi
+    if (( deploy_failed )); then
+        if [[ -n "$previous_link" ]]; then
+            eve_map_switch_web_release "$EVE_MAP_HOME/web/$previous_link"
+        fi
+        current_flyway="$(cli_flyway_version)"
+        if [[ "$current_flyway" == "$old_flyway" ]]; then
+            install -o root -g eve-map -m 0640 "$env_backup" "$ENV_FILE"
+            install -o root -g eve-map -m 0644 "$manifest_backup" "$EVE_MAP_HOME/release/self-hosted-release.json"
+            if "$EVE_MAP_HOME/ops/deploy.sh" "$ENV_FILE" "$(cli_api_origin)" "$(cli_web_origin)"; then
+                eve_map_die "update failed; the previous Web and Server release was restored"
+            fi
+            eve_map_die "update and automatic application rollback both failed; PostgreSQL data and backups were preserved"
+        fi
+        eve_map_die "update failed after Flyway advanced to ${current_flyway:-an unknown version}; Web was restored, but Server/database rollback requires the documented restore procedure"
+    fi
+    cli_update_state "$manifest_url"
+    rm -rf -- "$work_root"
+    trap - EXIT HUP INT TERM
+    printf 'Update completed: Self-Hosted %s (Web %s, Server %s).\n' \
+        "$RELEASE_SELF_HOSTED_VERSION" "$RELEASE_WEB_VERSION" "$RELEASE_SERVER_VERSION"
+}
+
+cli_restart() {
+    compose restart shared-map-server caddy >/dev/null
+    "$EVE_MAP_HOME/ops/deploy.sh" "$ENV_FILE" "$(cli_api_origin)" "$(cli_web_origin)" >/dev/null
+    printf 'Restart completed.\n'
+}
+
+cli_logs() {
+    local service="${1:-}"
+    if [[ -n "$service" ]]; then
+        case "$service" in postgres|shared-map-server|caddy) ;;
+            *) eve_map_die "service must be postgres, shared-map-server, or caddy" ;;
+        esac
+        compose logs --tail "${EVE_MAP_LOG_TAIL:-200}" "$service" 2>&1 | eve_map_redact
+    else
+        compose logs --tail "${EVE_MAP_LOG_TAIL:-200}" postgres shared-map-server caddy 2>&1 | eve_map_redact
+    fi
+}
+
+cli_diagnostics() {
+    local api_origin web_origin api_headers web_headers flyway last_backup
+    api_origin="$(cli_api_origin)"
+    web_origin="$(cli_web_origin)"
+    api_headers="$(mktemp)"
+    web_headers="$(mktemp)"
+    DIAGNOSTIC_API_HEADERS="$api_headers"
+    DIAGNOSTIC_WEB_HEADERS="$web_headers"
+    trap 'rm -f -- "$DIAGNOSTIC_API_HEADERS" "$DIAGNOSTIC_WEB_HEADERS"' EXIT HUP INT TERM
+    curl --silent --show-error --max-time 10 --dump-header "$api_headers" --output /dev/null \
+        --header "Origin: $web_origin" "$api_origin/api/v1/meta" || true
+    curl --silent --show-error --max-time 10 --dump-header "$web_headers" --output /dev/null \
+        "$web_origin/data/manifest.json" || true
+    flyway="$(cli_flyway_version)"
+    last_backup="$(find "$EVE_MAP_HOME/backups-local-staging" -type f -name '*.dump.gpg' -printf '%TY-%Tm-%TdT%TH:%TM:%TSZ %f\n' 2>/dev/null | sort -r | head -n 1 || true)"
+    {
+        printf 'EVE Map diagnostics (secrets are never read)\n'
+        printf 'Generated: %s\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '[Host]\n'
+        grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release || true
+        printf 'architecture=%s\n' "$(uname -m)"
+        awk '/^MemTotal:/ { print "memoryKiB=" $2 }' /proc/meminfo
+        df -Pk "$EVE_MAP_HOME" | awk 'NR == 2 { print "diskAvailableKiB=" $4 }'
+        printf '\n[DNS]\n'
+        getent ahostsv4 "$(eve_map_read_env SHARED_MAP_DOMAIN "$ENV_FILE")" || true
+        getent ahostsv4 "$(eve_map_read_env SHARED_MAP_WEB_DOMAIN "$ENV_FILE")" || true
+        printf '\n[Docker]\n'
+        "$DOCKER_BIN" version --format 'client={{.Client.Version}} server={{.Server.Version}}' || true
+        "$DOCKER_BIN" compose version || true
+        compose ps || true
+        printf '\n[Images]\n'
+        compose --profile ops config --images || true
+        printf '\n[Health]\n'
+        cli_status || true
+        printf '\nflyway=%s\n' "${flyway:-unavailable}"
+        printf 'lastBackup=%s\n' "${last_backup:-none}"
+        printf '\n[API HTTPS/CORS headers]\n'
+        grep -Ei '^(HTTP/|strict-transport-security:|x-content-type-options:|access-control-allow-origin:)' "$api_headers" || true
+        printf '\n[Web manifest headers]\n'
+        grep -Ei '^(HTTP/|cache-control:|content-type:|content-encoding:|strict-transport-security:|x-content-type-options:)' "$web_headers" || true
+    } 2>&1 | eve_map_redact
+    rm -f -- "$api_headers" "$web_headers"
+    trap - EXIT HUP INT TERM
+}
+
+cli_web_pack() {
+    [[ $# == 1 ]] || eve_map_die "usage: eve-map web-pack <file-or-directory>"
+    eve_map_install_web_pack "$1"
+    printf 'Web Pack %s (SDE %s) installed. Refresh the Web Map to load it.\n' "$WEB_PACK_VERSION" "$WEB_PACK_SDE_BUILD"
+}
+
+cli_version() {
+    local key
+    for key in selfHostedVersion webVersion serverVersion installerVersion; do
+        printf '%s=%s\n' "$key" "$(awk -F= -v wanted="$key" '$1 == wanted { print $2 }' "$STATE_FILE")"
+    done
+    printf 'webPack=%s\n' "$(cli_web_pack_summary)"
+}
+
+cli_main() {
+    local command="${1:-}"
+    [[ -n "$command" ]] || { cli_usage; return 2; }
+    shift || true
+    case "$command" in
+        -h|--help|help) cli_usage; return ;;
+    esac
+    cli_require_root
+    cli_require_installation
+    eve_map_require_command "$DOCKER_BIN"
+    eve_map_require_command jq
+    case "$command" in
+        status) [[ $# == 0 ]] || eve_map_die "status accepts no arguments"; cli_status ;;
+        update) [[ $# -le 1 ]] || eve_map_die "update accepts at most one manifest URL"; cli_update "${1:-}" ;;
+        restart) [[ $# == 0 ]] || eve_map_die "restart accepts no arguments"; cli_restart ;;
+        logs) [[ $# -le 1 ]] || eve_map_die "logs accepts at most one service"; cli_logs "${1:-}" ;;
+        diagnostics) [[ $# == 0 ]] || eve_map_die "diagnostics accepts no arguments"; cli_diagnostics ;;
+        backup) [[ $# == 0 ]] || eve_map_die "backup accepts no arguments"; cli_backup ;;
+        web-pack) cli_web_pack "$@" ;;
+        version) [[ $# == 0 ]] || eve_map_die "version accepts no arguments"; cli_version ;;
+        *) eve_map_die "unknown command: $command" ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    cli_main "$@"
+fi

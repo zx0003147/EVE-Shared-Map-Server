@@ -88,6 +88,7 @@ services:
     image: ${SHARED_MAP_CADDY_IMAGE:?Set SHARED_MAP_CADDY_IMAGE to an exact non-latest tag}
     environment:
       SHARED_MAP_DOMAIN: ${SHARED_MAP_DOMAIN:?Set the production domain}
+      SHARED_MAP_WEB_DOMAIN: ${SHARED_MAP_WEB_DOMAIN:?Set the production Web Map domain}
       SHARED_MAP_ACME_EMAIL: ${SHARED_MAP_ACME_EMAIL:?Set the ACME contact email}
     ports:
       - "${SHARED_MAP_HTTP_PORT:-80}:80"
@@ -96,6 +97,7 @@ services:
       - edge
     volumes:
       - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web:/srv/eve-map:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
