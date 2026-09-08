@@ -228,6 +228,8 @@ test_config_contract() {
     ! grep -Eq '(^|[[:space:]])ports:.*(5432|8080)' "$REPOSITORY_ROOT/docker-compose.prod.yml"
 }
 
+# These mocks are invoked indirectly by installer_main after the production functions are sourced.
+# shellcheck disable=SC2317
 test_install_success_simulation() (
     local calls="$TEST_ROOT/install-calls"
     rm -f -- "$calls"
