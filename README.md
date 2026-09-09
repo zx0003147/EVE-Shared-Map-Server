@@ -1,6 +1,6 @@
 # EVE Shared Map Server
 
-EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. Version 0.3.0 provides the identity,
+EVE Shared Map Server is the collaboration backend for EVE Static Map Planner. Version 0.3.1 provides the identity,
 Workspace, membership, invite, device-token, authentication, authorization, audit, idempotency, complete Shared
 Marker API, and the optional bounded Route Handoff feature. The Map desktop repository is not a dependency of this
 server and remains usable without it.
@@ -16,7 +16,7 @@ You need only:
 From a published self-hosted release checkout, run:
 
 ```sh
-git clone --branch v0.3.0 --depth 1 https://github.com/zx0003147/EVE-Shared-Map-Server.git
+git clone --branch v0.3.1 --depth 1 https://github.com/zx0003147/EVE-Shared-Map-Server.git
 cd EVE-Shared-Map-Server
 sudo ./install.sh
 ```
@@ -247,7 +247,7 @@ must have zero skipped PostgreSQL tests.
 ## Docker workflow
 
 ```powershell
-docker build -t eve-shared-map-server:0.3.0 .
+docker build -t eve-shared-map-server:0.3.1 .
 docker compose -f docker-compose.dev.yml --profile server up --build -d
 docker compose -f docker-compose.dev.yml --profile server down
 ```
@@ -285,14 +285,14 @@ volumes, encrypted checksummed backups, 30-daily/12-monthly retention, guarded r
 timer, and schema-aware update/rollback guidance. See
 [`docs/PRODUCTION-DEPLOYMENT.md`](docs/PRODUCTION-DEPLOYMENT.md) before operating a public instance.
 
-For a self-hosted release, build and publish the two immutable `0.3.0` images from an approved clean commit, copy
+For a self-hosted release, build and publish the two immutable `0.3.1` images from an approved clean commit, copy
 `docker-compose.prod.yml`, `.env.production.example`, and `ops/` to the host, create an untracked `.env.production`,
 generate the file-mounted secrets, and start the exact image tags through Docker Compose. Caddy obtains and renews the
 public certificate; PostgreSQL and the Ktor application remain on internal Docker networks. Run the production
 readiness validation and configure the documented encrypted off-site backup schedule before inviting users. The full
 commands, permissions, health checks, rollback procedure, and restore drill are in the deployment runbook.
 
-In EVE Static Map Planner 1.9.0, enter the Shared Marker origin, for example `https://markers.example.com`, under Shared Map
+In EVE Static Map Planner 1.9.1, enter the Shared Marker origin, for example `https://markers.example.com`, under Shared Map
 preferences and exchange a Workspace invite. `/api/v1` is appended by the client. No particular hosted domain is
 required: operators may use any correctly configured HTTPS origin.
 

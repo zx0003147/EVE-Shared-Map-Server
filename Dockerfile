@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/root/.gradle \
 
 FROM eclipse-temurin:25.0.4_7-jre-alpine-3.24 AS runtime
 
-ARG APP_VERSION=0.3.0
+ARG APP_VERSION=0.3.1
 ARG VCS_REF=unknown
 
 LABEL org.opencontainers.image.title="EVE Shared Map Server" \

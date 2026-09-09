@@ -8,7 +8,7 @@ param(
     [Parameter()]
     [string]$OpsImage = 'eve-shared-map-ops:phase8a',
     [Parameter()]
-    [string]$ExpectedServerVersion = '0.3.0'
+    [string]$ExpectedServerVersion = '0.3.1'
 )
 
 $ErrorActionPreference = 'Stop'

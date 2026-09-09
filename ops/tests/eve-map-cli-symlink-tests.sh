@@ -15,7 +15,7 @@ ln -s "$INSTALLED_ROOT/ops/eve-map" "$SYMLINK_PATH"
 printf 'SHARED_MAP_DOMAIN=markers.example.test\nSHARED_MAP_WEB_DOMAIN=map.example.test\nSHARED_MAP_EXPECTED_FLYWAY_VERSION=4\n' \
     >"$CLI_HOME/.env.production"
 printf 'fixture\n' >"$CLI_HOME/docker-compose.prod.yml"
-printf 'selfHostedVersion=1.1.0\nwebVersion=1.9.0\nserverVersion=0.3.0\ninstallerVersion=1.1.0\n' \
+printf 'selfHostedVersion=1.1.1\nwebVersion=1.9.1\nserverVersion=0.3.1\ninstallerVersion=1\n' \
     >"$CLI_HOME/.installer-state"
 printf '{"schemaVersion":1,"sdeBuild":3466501,"packVersion":"fixture"}\n' \
     >"$CLI_HOME/web/current/data/manifest.json"
@@ -66,6 +66,6 @@ for command in help status version; do
     [[ "$installed_output" == "$symlink_output" ]]
 done
 
-[[ "$symlink_output" == *"selfHostedVersion=1.1.0"* ]]
-[[ "$symlink_output" == *"serverVersion=0.3.0"* ]]
+[[ "$symlink_output" == *"selfHostedVersion=1.1.1"* ]]
+[[ "$symlink_output" == *"serverVersion=0.3.1"* ]]
 [[ "$symlink_output" == *"webPack=SDE 3466501 / fixture"* ]]
