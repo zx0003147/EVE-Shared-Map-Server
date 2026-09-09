@@ -4,7 +4,8 @@
 set -Eeuo pipefail
 
 EVE_MAP_HOME="${EVE_MAP_HOME:-/opt/eve-shared-map}"
-SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P)"
 # Installed and source-tree layouts both keep the library beside this command.
 # shellcheck disable=SC1091
 source "$SCRIPT_DIRECTORY/lib/eve-map-common.sh"

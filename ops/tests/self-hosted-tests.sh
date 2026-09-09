@@ -325,6 +325,7 @@ run_test 'install success simulation' test_install_success_simulation
 run_test 'update staging' test_update_staging
 run_test 'Web Pack update' test_web_pack_update
 run_test 'diagnostics redaction' test_diagnostics_redaction
+run_test 'CLI direct installed and symlink invocations' "$REPOSITORY_ROOT/ops/tests/eve-map-cli-symlink-tests.sh"
 
 printf '\n%d passed, %d failed\n' "$passes" "$failures"
 (( failures == 0 ))
