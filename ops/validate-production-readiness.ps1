@@ -8,7 +8,7 @@ param(
     [Parameter()]
     [string]$OpsImage = 'eve-shared-map-ops:phase8a',
     [Parameter()]
-    [string]$ExpectedServerVersion = '0.2.0'
+    [string]$ExpectedServerVersion = '0.3.0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -376,7 +376,7 @@ SHARED_MAP_LOG_LEVEL=INFO
         })
         mapMetadata = @{
             universeBuild = [string]$meta.Json.universeBuild
-            plannerVersion = '1.8.0'
+            plannerVersion = '1.9.0'
             webPackVersion = 'validation'
         }
     } $token ([Guid]::NewGuid().ToString())

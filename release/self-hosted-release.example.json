@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "selfHostedVersion": "1.0.0",
-  "webVersion": "1.8.0",
-  "serverVersion": "0.2.0",
-  "webArtifactUrl": "https://downloads.example.com/eve-map-web-1.8.0.zip",
+  "selfHostedVersion": "1.1.0",
+  "webVersion": "1.9.0",
+  "serverVersion": "0.3.0",
+  "webArtifactUrl": "https://downloads.example.com/eve-map-web-1.9.0.zip",
   "webSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-  "serverImage": "ghcr.io/example/eve-shared-map-server:0.2.0",
-  "opsImage": "ghcr.io/example/eve-shared-map-ops:0.2.0",
+  "serverImage": "ghcr.io/example/eve-shared-map-server:0.3.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "opsImage": "ghcr.io/example/eve-shared-map-ops:0.3.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "flywayVersion": 4,
   "minimumInstallerVersion": 1
 }
