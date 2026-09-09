@@ -168,8 +168,10 @@ response replay.
 ## Workspace roles
 
 - `VIEWER`: authenticate and read self/Workspace data, Shared Markers, and Route Handoffs.
-- `EDITOR`: Viewer capabilities plus Shared Marker create/update/delete and Route Handoff publish.
-- `ADMIN`: Editor capabilities plus member, invite, role, membership, and device administration.
+- `EDITOR`: Viewer capabilities plus Shared Marker create/update/delete, Route Handoff publish, and deletion of their
+  own published handoffs.
+- `ADMIN`: Editor capabilities plus deletion of any Workspace Route Handoff and member, invite, role, membership,
+  and device administration.
 
 The final active Admin cannot be downgraded or removed.
 
@@ -187,6 +189,7 @@ The final active Admin cannot be downgraded or removed.
 - `PATCH /api/v1/workspaces/{workspaceId}/markers/{markerId}`
 - `DELETE /api/v1/workspaces/{workspaceId}/markers/{markerId}?expectedVersion={version}`
 - `GET|POST /api/v1/workspaces/{workspaceId}/route-handoffs`
+- `DELETE /api/v1/workspaces/{workspaceId}/route-handoffs/{routeHandoffId}`
 - `GET|POST /api/v1/workspaces/{workspaceId}/members`
 - `PATCH|DELETE /api/v1/workspaces/{workspaceId}/members/{memberId}`
 - `GET /api/v1/workspaces/{workspaceId}/members/{memberId}/devices`
@@ -196,14 +199,20 @@ The final active Admin cannot be downgraded or removed.
 - `DELETE /api/v1/workspaces/{workspaceId}/invites/{inviteId}`
 
 All authenticated mutations require a canonical UUID `Idempotency-Key`, except invite exchange. Marker create,
-update/delete and Route Handoff publish use ordinary replayable 24-hour idempotency; marker update/delete also
+update/delete and Route Handoff publish/delete use ordinary replayable 24-hour idempotency; marker update/delete also
 require optimistic-lock versions. `/api/v1/meta` keeps protocol major 1 and advertises `route-handoffs` separately
 from `shared-markers` plus the packaged universe build. Older clients and older Servers remain feature-compatible.
 
 Route Handoffs are independent Workspace rows, not Shared Marker rows and not Web Pack data. A publish stores route
 intent and its resolved snapshot, validates systems/path/edge vocabulary/range, writes only safe audit metadata,
 expires after seven days, and trims each Workspace to its newest 20 records. Viewer may read; Editor/Admin may
-publish. No Device Token, local database, Personal Ansiblex, or unrelated Desktop state is accepted.
+publish. A publisher may delete their own handoff and an Admin may delete any Workspace handoff; a non-owning Editor
+receives the same not-found result as a missing or cross-Workspace row. No Device Token, local database, Personal
+Ansiblex, or unrelated Desktop state is accepted.
+
+Member removal is a soft revocation for audit/history retention. Default member lists, active-member counts, and
+selection controls expose only rows whose membership is still active. The same transaction revokes every device for
+the removed membership, and the final active Admin remains protected.
 
 ## Solar-system allowlist
 
@@ -257,8 +266,9 @@ repair remain disabled.
 
 Audit events are append-only and contain event-time actor identity plus safe metadata. Marker rows are hard deleted,
 while `MARKER_CREATED`, `MARKER_UPDATED`, and `MARKER_DELETED` audit events remain. `ROUTE_HANDOFF_PUBLISHED` stores
-only request ID, route type, origin/destination, and resolved-system count. Audit never contains complete marker notes,
-route bodies, bearer tokens, invite secrets, hashes, Authorization headers, database passwords, or request bodies.
+only request ID, route type, origin/destination, and resolved-system count. `ROUTE_HANDOFF_DELETED` stores only the
+request ID, route type, publisher member ID, and origin system. Audit never contains complete marker notes, route
+bodies, bearer tokens, invite secrets, hashes, Authorization headers, database passwords, or request bodies.
 
 Logs are JSON Lines on stdout. Access logs contain bounded request ID, method, route template, status, and duration;
 they omit query strings, headers, cookies, and request/response bodies.

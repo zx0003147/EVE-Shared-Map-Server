@@ -233,6 +233,27 @@ fun Route.sharedMapRoutes(
                 MutationResponse(201, PROTOCOL_JSON.encodeToJsonElement(handoff.toDto()))
             }
         }
+
+        delete("/api/v1/workspaces/{workspaceId}/route-handoffs/{handoffId}") {
+            val principal = call.authenticate(service)
+            val workspaceId = canonicalUuid(call.parameters["workspaceId"])
+            authorization.requireWorkspace(principal, workspaceId, WorkspaceCapability.ROUTE_HANDOFF_WRITE)
+            val handoffId = canonicalUuid(call.parameters["handoffId"])
+            call.executeMutation(
+                service,
+                principal,
+                call.requireIdempotencyKey(),
+                mutationFingerprint(
+                    "DELETE",
+                    "/api/v1/workspaces/$workspaceId/route-handoffs/$handoffId",
+                ),
+                requiredCapability = WorkspaceCapability.ROUTE_HANDOFF_WRITE,
+            ) { connection ->
+                call.enforceMarkerWriteRate(rateLimiter, principal)
+                routeHandoffService.delete(connection, principal, handoffId, call.requestId())
+                MutationResponse(204, null)
+            }
+        }
     }
 
     get("/api/v1/workspaces/{workspaceId}/members") {

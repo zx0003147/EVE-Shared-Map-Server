@@ -396,6 +396,7 @@ class Phase3PostgreSqlIntegrationTest {
         try {
             val admin = bundle.bootstrapAdminIssued()
             val editor = bundle.createMemberDevice(admin.principal, WorkspaceRole.EDITOR, "Route Editor")
+            val otherEditor = bundle.createMemberDevice(admin.principal, WorkspaceRole.EDITOR, "Other Route Editor")
             val viewer = bundle.createMemberDevice(admin.principal, WorkspaceRole.VIEWER, "Route Viewer")
             val other = bundle.seedIndependentWorkspace("Other Workspace", WorkspaceRole.ADMIN)
             val workspaceId = admin.principal.membership.workspaceId
@@ -429,6 +430,7 @@ class Phase3PostgreSqlIntegrationTest {
             assertEquals(created.bodyAsText(), replay.bodyAsText())
             assertEquals("NORMAL", created.json()["type"]!!.jsonPrimitive.content)
             assertEquals("Route Editor", created.json()["publisher"]!!.jsonObject["displayName"]!!.jsonPrimitive.content)
+            val handoffId = created.json()["routeHandoffId"]!!.jsonPrimitive.content
             assertEquals(1L, bundle.count("route_handoffs"))
             assertEquals(1L, bundle.countWhere("audit_events", "action = 'ROUTE_HANDOFF_PUBLISHED'"))
 
@@ -438,6 +440,56 @@ class Phase3PostgreSqlIntegrationTest {
             val otherPath = "/api/v1/workspaces/${other.principal.membership.workspaceId}/route-handoffs"
             assertTrue(client.get(otherPath) { bearer(other.rawSecret) }.json()["routeHandoffs"]!!.jsonArray.isEmpty())
             assertEquals(HttpStatusCode.NotFound, client.get(path) { bearer(other.rawSecret) }.status)
+
+            val handoffPath = "$path/$handoffId"
+            assertEquals(
+                HttpStatusCode.Forbidden,
+                client.delete(handoffPath) { bearer(viewer.rawSecret); idempotency() }.status,
+            )
+            assertEquals(
+                HttpStatusCode.NotFound,
+                client.delete(handoffPath) { bearer(otherEditor.rawSecret); idempotency() }.status,
+            )
+            assertEquals(
+                HttpStatusCode.NotFound,
+                client.delete("$otherPath/$handoffId") { bearer(other.rawSecret); idempotency() }.status,
+            )
+            val publisherDeleteKey = UUID.randomUUID().toString()
+            val publisherDelete = client.delete(handoffPath) {
+                bearer(editor.rawSecret); header("Idempotency-Key", publisherDeleteKey)
+            }
+            val publisherDeleteReplay = client.delete(handoffPath) {
+                bearer(editor.rawSecret); header("Idempotency-Key", publisherDeleteKey)
+            }
+            assertEquals(HttpStatusCode.NoContent, publisherDelete.status)
+            assertEquals(HttpStatusCode.NoContent, publisherDeleteReplay.status)
+            assertEquals(
+                HttpStatusCode.NotFound,
+                client.delete(handoffPath) { bearer(editor.rawSecret); idempotency() }.status,
+            )
+            assertTrue(client.get(path) { bearer(viewer.rawSecret) }.json()["routeHandoffs"]!!.jsonArray.isEmpty())
+
+            val adminDeleteTarget = client.post(path) {
+                bearer(editor.rawSecret); idempotency(); jsonBody(routeBody())
+            }
+            val adminDeleteTargetId = adminDeleteTarget.json()["routeHandoffId"]!!.jsonPrimitive.content
+            assertEquals(
+                HttpStatusCode.Conflict,
+                client.delete("$path/$adminDeleteTargetId") {
+                    bearer(editor.rawSecret); header("Idempotency-Key", publisherDeleteKey)
+                }.status,
+            )
+            assertEquals(
+                HttpStatusCode.NoContent,
+                client.delete("$path/$adminDeleteTargetId") { bearer(admin.rawSecret); idempotency() }.status,
+            )
+            assertTrue(client.get(path) { bearer(viewer.rawSecret) }.json()["routeHandoffs"]!!.jsonArray.isEmpty())
+            assertEquals(2L, bundle.countWhere("audit_events", "action = 'ROUTE_HANDOFF_DELETED'"))
+            val deletionAudit = bundle.scalar(
+                "SELECT string_agg(metadata::text, '') FROM audit_events WHERE action = 'ROUTE_HANDOFF_DELETED'",
+            )
+            assertFalse(deletionAudit.contains(editor.rawSecret))
+            assertFalse(deletionAudit.contains(routeBody()))
 
             val invalid = client.post(path) {
                 bearer(editor.rawSecret); idempotency(); jsonBody(routeBody(destinationSystemId = Int.MAX_VALUE))
@@ -457,7 +509,7 @@ class Phase3PostgreSqlIntegrationTest {
             )
             val expired = client.get(path) { bearer(viewer.rawSecret) }
             assertTrue(expired.json()["routeHandoffs"]!!.jsonArray.isEmpty())
-            assertEquals(22L, bundle.countWhere("audit_events", "action = 'ROUTE_HANDOFF_PUBLISHED'"))
+            assertEquals(23L, bundle.countWhere("audit_events", "action = 'ROUTE_HANDOFF_PUBLISHED'"))
         } finally {
             bundle.close()
         }

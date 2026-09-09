@@ -1,6 +1,7 @@
 package dev.evesharedmap.server.route
 
 import dev.evesharedmap.server.domain.AuthenticationPrincipal
+import dev.evesharedmap.server.domain.WorkspaceRole
 import dev.evesharedmap.server.service.ServiceErrors
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -98,6 +99,49 @@ class RouteHandoffService(
             ?: error("Newly published Route Handoff disappeared inside its transaction.")
     }
 
+    fun delete(
+        connection: Connection,
+        actor: AuthenticationPrincipal,
+        handoffId: UUID,
+        requestId: String,
+    ) {
+        val handoff = connection.findRouteHandoffForDelete(actor.membership.workspaceId, handoffId)
+            ?: throw ServiceErrors.notFound()
+        if (actor.membership.role != WorkspaceRole.ADMIN && handoff.publisherMemberId != actor.membership.memberId) {
+            // Deliberately hide handoff existence from a non-owning Editor.
+            throw ServiceErrors.notFound()
+        }
+        val now = clock.instant()
+        connection.prepareStatement(
+            "DELETE FROM route_handoffs WHERE workspace_id = ? AND route_handoff_id = ?",
+        ).use { statement ->
+            statement.setObject(1, actor.membership.workspaceId)
+            statement.setObject(2, handoffId)
+            if (statement.executeUpdate() != 1) throw ServiceErrors.notFound()
+        }
+        connection.prepareStatement(
+            """
+            INSERT INTO audit_events (
+                workspace_id, actor_user_id, actor_display_name, action, target_type,
+                target_id, system_id, timestamp, metadata
+            ) VALUES (?, ?, ?, 'ROUTE_HANDOFF_DELETED', 'ROUTE_HANDOFF', ?, ?, ?, CAST(? AS jsonb))
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, actor.membership.workspaceId)
+            statement.setObject(2, actor.membership.user.userId)
+            statement.setString(3, actor.membership.user.displayName)
+            statement.setObject(4, handoffId)
+            statement.setInt(5, handoff.originSystemId)
+            statement.setInstant(6, now)
+            statement.setString(7, buildJsonObject {
+                put("requestId", requestId)
+                put("routeType", handoff.type.name)
+                put("publisherMemberId", handoff.publisherMemberId.toString())
+            }.toString())
+            check(statement.executeUpdate() == 1)
+        }
+    }
+
     internal companion object {
         val ROUTE_HANDOFF_TTL: Duration = Duration.ofDays(7)
         const val MAX_ROUTE_HANDOFFS_PER_WORKSPACE = 20
@@ -114,6 +158,32 @@ class RouteHandoffService(
         const val ORDER_LIMIT = " ORDER BY h.created_at DESC, h.route_handoff_id DESC LIMIT 20"
     }
 }
+
+private fun Connection.findRouteHandoffForDelete(workspaceId: UUID, handoffId: UUID): RouteHandoffDeleteLock? =
+    prepareStatement(
+        """
+        SELECT publisher_member_id, route_type, origin_system_id
+        FROM route_handoffs
+        WHERE workspace_id = ? AND route_handoff_id = ?
+        FOR UPDATE
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setObject(1, workspaceId)
+        statement.setObject(2, handoffId)
+        statement.executeQuery().use { result ->
+            if (!result.next()) null else RouteHandoffDeleteLock(
+                publisherMemberId = result.getObject("publisher_member_id", UUID::class.java),
+                type = RouteHandoffType.valueOf(result.getString("route_type")),
+                originSystemId = result.getInt("origin_system_id"),
+            )
+        }
+    }
+
+private data class RouteHandoffDeleteLock(
+    val publisherMemberId: UUID,
+    val type: RouteHandoffType,
+    val originSystemId: Int,
+)
 
 private fun Connection.findRouteHandoff(workspaceId: UUID, handoffId: UUID): RouteHandoff? = prepareStatement(
     RouteHandoffService.SELECT_HANDOFFS + " WHERE h.workspace_id = ? AND h.route_handoff_id = ?",

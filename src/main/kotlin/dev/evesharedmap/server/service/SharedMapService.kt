@@ -281,7 +281,7 @@ class SharedMapService(
                    m.created_at, m.updated_at, m.revoked_at
             FROM workspace_members m
             JOIN users u ON u.user_id = m.user_id
-            WHERE m.workspace_id = ?
+            WHERE m.workspace_id = ? AND m.revoked_at IS NULL
             ORDER BY m.created_at, m.member_id
             """.trimIndent(),
         ).use { statement ->

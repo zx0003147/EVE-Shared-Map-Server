@@ -375,6 +375,12 @@ class Phase2PostgreSqlIntegrationTest {
                 idempotency()
             }
             assertEquals(HttpStatusCode.NoContent, remove.status)
+            val activeMembers = client.get("/api/v1/workspaces/$workspaceId/members") { bearer(adminToken) }
+            assertEquals(HttpStatusCode.OK, activeMembers.status)
+            assertFalse(activeMembers.bodyAsText().contains(editorMemberId))
+            assertEquals(1L, bundle.countWhere("workspace_members", "workspace_id = '$workspaceId' AND revoked_at IS NULL"))
+            assertEquals(1L, bundle.countWhere("workspace_members", "member_id = '$editorMemberId' AND revoked_at IS NOT NULL"))
+            assertEquals(1L, bundle.countWhere("audit_events", "action = 'MEMBER_REVOKED'"))
             val membershipRevoked = client.get("/api/v1/me") { bearer(editorToken) }
             assertEquals(HttpStatusCode.Forbidden, membershipRevoked.status)
             assertContains(membershipRevoked.bodyAsText(), "\"code\":\"FORBIDDEN\"")
